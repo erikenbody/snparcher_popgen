@@ -1,4 +1,4 @@
-# ccgp-popgen-workflow
+# snparcher_popgen
 
 A Snakemake workflow that takes a joint-genotyped VCF and produces population
 structure and genetic diversity results: ancestry inference, population
@@ -105,7 +105,7 @@ derives callability per sample from the GVCFs.
 ## Quick start
 
 ```bash
-git clone <this repo> && cd ccgp-popgen-workflow
+git clone <this repo> && cd snparcher_popgen
 conda env create -n snakemake -f workflow/envs/snakemake.yml   # or use your own
 conda activate snakemake
 
