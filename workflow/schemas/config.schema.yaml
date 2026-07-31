@@ -33,14 +33,6 @@ properties:
       much of the genome was never callable, so pi and heterozygosity come out
       biased low and are not comparable across projects. The clam module does not
       use this: it derives callability per sample from the GVCFs.
-  exclude_samples:
-    type: ["string", "null"]
-    default: null
-    description: >
-      Optional path to a file listing samples to drop, one per line (e.g. samples
-      that failed QC). Applied when building the analysis set, alongside samples
-      dropped for having no coordinates. Names not present in the VCF are
-      reported in the log and ignored. null keeps every sample.
 
   # ------------------------------------------------------------- coordinates
   use_coords:
@@ -67,14 +59,6 @@ properties:
       out instead if any sample lacks coordinates.
 
   # ----------------------------------------------------------- SNP subsetting
-  scaffolds_to_exclude:
-    type: string
-    default: ""
-    description: >
-      Comma-separated, no spaces (e.g. "mtDNA,Y"). Dropped when building the
-      analysis set. Empty string disables. Sex-linked and anomalous scaffolds are
-      detected and excluded automatically as well — this is for scaffolds you
-      already know you do not want.
   missingness:
     type: number
     default: 0.25

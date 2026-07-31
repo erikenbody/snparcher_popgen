@@ -17,9 +17,9 @@ refgenome: GCA_000000000.1
 
 # --- input ------------------------------------------------------------------
 # The workflow starts from results/{refgenome}/{final_prefix}_clean_snps.vcf.gz:
-# a filtered, biallelic SNP VCF. Site filtering is the variant caller's job.
-exclude_samples: null         # e.g. results/GCA_000000000.1/my-project_samps.txt
-
+# a filtered, biallelic SNP VCF. Dropping bad samples and filtering sites are
+# snpArcher's job, upstream of here.
+#
 # A callable-sites BED, if you have one (snpArcher produces one). Its only job is
 # to provide the denominator for pi and heterozygosity. With null the denominator
 # is the whole assembly length, which biases both low. clam does not need it — it
@@ -34,7 +34,6 @@ coords_sheet: config/coords.tsv
 drop_samples_without_coords: true
 
 # --- SNP subsetting ---------------------------------------------------------
-scaffolds_to_exclude: ""     # e.g. "mtDNA,Y"; sex-linked ones are found for you
 missingness: 0.25            # applied to the ADMIXTURE/TESS subsample
 ld_r2: 0.6
 subsample_maf: 0.05

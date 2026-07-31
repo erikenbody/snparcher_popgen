@@ -56,26 +56,31 @@ All paths are relative to the working directory, which you set with
 | a coordinate sheet | when `use_coords: true` | see below |
 | a directory of GVCFs | when `run_clam: true` | `{sample}.g.vcf.gz` + `.tbi` |
 | a callable-sites BED | optional | the pi/heterozygosity denominator; see below |
-| a list of samples to drop | optional | `exclude_samples` |
 
 `{prefix}` is `final_prefix` and `{refgenome}` is `refgenome` from the config.
 
 ### Filtering is not this workflow's job
 
-The input is an already-filtered SNP set. There is no filtering stage: depth,
-missingness, MAF and callable-region filtering all belong to the variant caller,
-where the evidence for them lives, and snpArcher already does them. Repeating
-that work here would mean two places to keep consistent and two ways to get it
-wrong.
+The input is an already-filtered SNP set, and there is no filtering stage. Depth,
+missingness, MAF and callable-region filtering, and dropping samples that failed
+QC, all belong upstream with the variant caller, where the evidence for them
+lives — snpArcher already does them. Repeating that work here would mean two
+places to keep consistent and two ways to get it wrong.
 
-What the workflow does still remove, in `prepare`:
+The workflow removes exactly two things of its own accord:
 
-- samples listed in `exclude_samples`, and samples with no coordinates
-- scaffolds listed in `scaffolds_to_exclude`
-- sex-linked and anomalous scaffolds, detected automatically in `populations`
+- **samples with no coordinates**, when `use_coords: true` — so that every
+  analysis sees the same sample set. Allele counts and AF are recomputed
+  afterwards, so sites that became invariant do not linger.
+- **sex-linked and anomalous scaffolds**, detected from relative depth and
+  heterozygosity in `populations`, and excluded from every per-population VCF and
+  from clam.
 
-Allele counts and AF are recomputed after samples are dropped, so sites that
-became invariant do not linger.
+Note that the second of those applies to the per-population statistics (ROH,
+F_ROH, pi, clam) but *not* to `prepare`, so PCA, ADMIXTURE and TESS are computed
+including sex-linked scaffolds. Inspect
+`populations/{prefix}_sex_id/{prefix}_sex_chromosome_candidates.csv` — if a large
+scaffold is flagged, it is worth knowing that the structure results saw it.
 
 ### The coordinate sheet
 
@@ -199,7 +204,6 @@ Under `results/{refgenome}/`:
 | Path | Contents |
 |---|---|
 | `prepare/{prefix}_analysis_set.vcf.gz` | the sample set every analysis uses |
-| `prepare/{prefix}_dropped_samples.txt` | samples removed, and why (see the log) |
 | `prepare/{prefix}_pruned_ld.vcf.gz` | LD-pruned SNPs |
 | `prepare/{prefix}_dist.dist` | pairwise distance matrix |
 | `structure/{prefix}.eigenvec` | PCA |

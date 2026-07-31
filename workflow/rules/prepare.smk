@@ -14,7 +14,6 @@ Outputs:
   {prefix}_annotated.vcf.gz      clean SNPs with CHROM_POS_REF_ALT variant IDs
   {prefix}.coords.txt            sample <TAB> longitude <TAB> latitude (no header)
   {prefix}_analysis_set.vcf.gz   the sample set every analysis uses
-  {prefix}_dropped_samples.txt   samples removed, and why (see the log)
   {prefix}_pruned_ld.vcf.gz      LD-pruned (ld_r2), for PCA/ADMIXTURE/TESS
   {prefix}_subsampled.vcf.gz     ~1M SNPs, stricter MAF, for ADMIXTURE/TESS
   {prefix}_dist.dist(.id)        plink identity-by-state distance matrices
@@ -81,11 +80,12 @@ rule prepare_coords:
 rule analysis_set:
     """The VCF every downstream analysis uses.
 
-    Two things are dropped here: samples with no coordinates, and anything the
-    user asked to remove via exclude_samples / scaffolds_to_exclude. Sample
-    exclusion lives in this rule because it is the one place that already
-    subsets samples — alleles are re-trimmed and AF recomputed so that sites
-    which became invariant after dropping samples do not linger.
+    The only thing dropped here is samples with no coordinates. Alleles are
+    re-trimmed and AF recomputed so that sites which became invariant after
+    dropping samples do not linger.
+
+    Sample and site exclusion upstream of this is snpArcher's job. Sex-linked
+    and anomalous scaffolds are detected and excluded later, in populations.
 
     When there is nothing to drop this is a straight copy, which keeps the rest
     of the workflow free of coordinate-mode branching.
@@ -93,49 +93,25 @@ rule analysis_set:
     input:
         vcf="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz",
         idx="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz.csi",
-        samples="results/{refGenome}/prepare/{prefix}_vcf_samples.txt",
         no_coords="results/{refGenome}/prepare/{prefix}.no_coords.txt",
-        exclude=[config["exclude_samples"]] if config["exclude_samples"] else [],
     output:
         vcf="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz",
         idx="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz.csi",
-        dropped="results/{refGenome}/prepare/{prefix}_dropped_samples.txt",
-    params:
-        exclude=lambda wc, input: input.exclude[0] if input.exclude else "",
-        chr_ex=lambda wc: (
-            f"-t ^{config['scaffolds_to_exclude']}"
-            if config["scaffolds_to_exclude"]
-            else ""
-        ),
     conda:
         "../envs/bcftools.yml"
     log:
         "logs/{refGenome}/prepare/{prefix}_analysis_set.log",
     shell:
-        # The drop list is intersected with the VCF sample list: names that are
-        # not in the VCF are reported and ignored, because bcftools -S ^ treats
-        # an unknown sample as a fatal error and a stale exclude list should not
-        # kill the run.
         """
         exec > {log} 2>&1
-        REQ=$(mktemp); DROP={output.dropped}
-        cat {input.no_coords} {params.exclude} 2>/dev/null | sort -u > $REQ
-        grep -Fxf $REQ {input.samples} 2>/dev/null | sort -u > $DROP || true
-        comm -23 $REQ $DROP | sed 's/^/  not in the VCF, ignored: /' || true
-        rm -f $REQ
-
-        if [ ! -s $DROP ] && [ -z "{params.chr_ex}" ]; then
-            echo "nothing to drop; copying the annotated VCF through"
+        if [ ! -s {input.no_coords} ]; then
+            echo "no samples to drop; copying the annotated VCF through"
             cp {input.vcf} {output.vcf}
             cp {input.idx} {output.idx}
         else
-            SARG=""
-            if [ -s $DROP ]; then
-                echo "dropping $(wc -l < $DROP) sample(s):"
-                sed 's/^/  /' $DROP
-                SARG="-S ^$DROP"
-            fi
-            bcftools view $SARG {params.chr_ex} -f .,PASS {input.vcf} -a -U -O u \
+            echo "dropping $(wc -l < {input.no_coords}) sample(s) without coordinates:"
+            sed 's/^/  /' {input.no_coords}
+            bcftools view -S ^{input.no_coords} -f .,PASS {input.vcf} -a -U -O u \
               | bcftools +fill-tags -Ou \
               | bcftools view -m2 -e 'AF==0 | ref="N" | ALT="."' -O z -o {output.vcf}
             bcftools index {output.vcf}
