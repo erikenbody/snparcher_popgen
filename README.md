@@ -217,9 +217,10 @@ snakemake --directory .test --configfile .test/config_nocoords.yaml \
           --software-deployment-method conda --cores 8
 ```
 
-Both test configs set `run_clam: false`, because per-sample GVCFs are far too
-large to ship in a repository. To exercise clam, point `gvcf_dir` at real GVCFs
-for the samples in your own dataset.
+Both paths have been run to completion on this data. Both test configs set
+`run_clam: false`, because per-sample GVCFs are far too large to ship in a
+repository. To exercise clam, point `gvcf_dir` at real GVCFs for the samples in
+your own dataset.
 
 `run_gone: false` as well: GONE needs to be cloned and built, and the test slice
 has nowhere near enough linked variants for LD-based Ne inference to mean

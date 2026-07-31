@@ -29,7 +29,7 @@ make_basemap <- function(coords, margin_frac = 0.12) {
   xlim <- c(xr[1] - pad_x, xr[2] + pad_x)
   ylim <- c(yr[1] - pad_y, yr[2] + pad_y)
 
-  world <- maps::map_data("world")
+  world <- ggplot2::map_data("world")
   layers <- list(
     ggplot2::geom_polygon(
       data = world,
@@ -42,7 +42,7 @@ make_basemap <- function(coords, margin_frac = 0.12) {
   if (overlaps_us) {
     layers <- c(layers, list(
       ggplot2::geom_polygon(
-        data = maps::map_data("state"),
+        data = ggplot2::map_data("state"),
         ggplot2::aes(x = long, y = lat, group = group),
         fill = NA, color = "grey60", linewidth = 0.2
       )
