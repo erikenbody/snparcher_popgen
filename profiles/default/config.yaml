@@ -1,0 +1,7 @@
+# Local execution profile.
+#   snakemake --profile profiles/default --directory /path/to/project
+software-deployment-method: conda
+keep-going: True
+rerun-incomplete: True
+printshellcmds: True
+cores: 8

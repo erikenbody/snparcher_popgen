@@ -1,0 +1,34 @@
+# Test configuration: coordinates available, TESS on, clam and GONE off.
+#
+#   snakemake --profile profiles/default --directory .test --configfile .test/config.yaml
+#
+# The data is a 20-sample, 100k-variant subset of a black bear dataset. The
+# coordinates are synthetic (two loose clusters), not real localities, so results
+# are meaningless — this exists to check that the workflow runs.
+
+final_prefix: 59-Ursus
+refgenome: GCA_024610735.1
+
+start_from: raw
+exclude_samples: results/GCA_024610735.1/59-Ursus_samps.txt
+callable_sites_bed: results/GCA_024610735.1/59-Ursus_callable_sites.bed.gz
+
+use_coords: true
+coords_sheet: coords.tsv
+drop_samples_without_coords: true
+
+# Small K range and two seeds keep the test to a few minutes.
+admixture_kmax: 3
+admixture_seeds: [42, 43]
+run_tess: true
+tess_kvals: "1:3"
+
+method: admixture
+manual_k_assignment: 2
+qvalue_threshold: 0.8
+
+min_samples_per_pop: 2
+min_scaffold_size: 10000000
+
+run_gone: false
+run_clam: false

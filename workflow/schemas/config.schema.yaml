@@ -1,0 +1,262 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+description: >
+  Configuration for the population-genomics workflow. Every key except
+  final_prefix and refgenome has a default supplied here, so a minimal
+  config.yaml only needs those two (plus coords_sheet if use_coords is true,
+  and gvcf_dir if run_clam is true).
+
+type: object
+
+properties:
+
+  # ------------------------------------------------------------------ project
+  final_prefix:
+    type: string
+    description: >
+      Prefix of the input VCF and of every output file. Input is expected at
+      results/{refgenome}/{final_prefix}_raw.vcf.gz (or _clean_snps.vcf.gz when
+      start_from is clean_snps).
+  refgenome:
+    type: string
+    description: >
+      Reference genome accession/name. Used only as a directory level inside
+      results/ and to locate results/{refgenome}/data/genome/{refgenome}.fna.fai.
+
+  # -------------------------------------------------------------- entry point
+  start_from:
+    type: string
+    enum: ["raw", "clean_snps"]
+    default: "raw"
+    description: >
+      raw: filter results/{refgenome}/{final_prefix}_raw.vcf.gz down to
+      _clean_snps.vcf.gz inside this workflow.
+      clean_snps: you already have results/{refgenome}/{final_prefix}_clean_snps.vcf.gz
+      (e.g. from snpArcher) and filtering is skipped.
+  callable_sites_bed:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Optional path to a BED of callable sites (e.g. snpArcher's
+      {prefix}_callable_sites.bed). Used for two things: variants are restricted
+      to these regions during filtering (instead of the depth-outlier filter),
+      and the total callable length becomes the denominator for pi and
+      heterozygosity. When null, depth outliers are identified from the VCF
+      itself and the denominator is the summed length of all scaffolds in the
+      .fai, which inflates the denominator by however much of the genome was
+      never callable.
+  exclude_samples:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Optional path to a file listing samples to drop from the raw VCF, one per
+      line (e.g. samples that failed QC). null keeps every sample.
+  min_contig_size:
+    type: integer
+    default: 0
+    description: >
+      Only used when use_callable_sites_bed is true. Variants on contigs shorter
+      than this (bp) are dropped. 0 keeps every contig.
+
+  # ------------------------------------------------------------- coordinates
+  use_coords:
+    type: boolean
+    default: true
+    description: >
+      true: read sample coordinates from coords_sheet; enables TESS, pie plots
+      and all map panels. false: run the entire workflow without coordinates.
+      TESS is force-disabled and population assignment falls back to ADMIXTURE.
+  coords_sheet:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Required when use_coords is true. Tab-delimited, with a header row and the
+      columns sample_id, longitude, latitude (extra columns are ignored).
+      Sample IDs must match the VCF sample names.
+  drop_samples_without_coords:
+    type: boolean
+    default: true
+    description: >
+      Only used when use_coords is true. true: samples absent from coords_sheet
+      (or with blank coordinates) are removed from the analysis VCF, so every
+      downstream analysis sees the same sample set. false: keep them, and error
+      out instead if any sample lacks coordinates.
+
+  # ---------------------------------------------------------------- filtering
+  maf:
+    type: number
+    default: 0.01
+    description: SNPs below this minor allele frequency are dropped. 0 disables.
+  missingness:
+    type: number
+    default: 0.25
+    description: SNPs with more than this fraction of missing calls are dropped. 1 disables.
+  scaffolds_to_exclude:
+    type: string
+    default: ""
+    description: >
+      Comma-separated, no spaces (e.g. "mtDNA,Y"). Excluded from the clean VCFs.
+      Empty string disables.
+  cov_threshold_stdev:
+    type: number
+    default: 2
+    description: >
+      Sites whose total depth deviates by more than this many standard
+      deviations from the mean are excluded. Only used when
+      use_callable_sites_bed is false.
+  ld_r2:
+    type: number
+    default: 0.6
+    description: r^2 threshold for the LD-pruned SNP set used by PCA/ADMIXTURE/TESS.
+  subsample_maf:
+    type: number
+    default: 0.05
+    description: Stricter MAF applied when building the ~1M SNP subsample.
+
+  # ---------------------------------------------------------------- structure
+  admixture_kmax:
+    type: integer
+    default: 10
+    minimum: 1
+    description: ADMIXTURE is run for K = 1..admixture_kmax.
+  admixture_seeds:
+    type: array
+    items:
+      type: integer
+    default: [42, 420, 69, 666, 80085]
+    description: >
+      One ADMIXTURE replicate per seed. The first seed is the one whose Q
+      matrices are plotted, so keep it stable across reruns.
+  run_tess:
+    type: boolean
+    default: true
+    description: >
+      Run TESS (spatially-explicit ancestry) and the pie-chart maps. Requires
+      use_coords; ignored (treated as false) when use_coords is false.
+  tess_kvals:
+    type: string
+    default: "1:10"
+    description: R-style range of K values for TESS, e.g. "1:10".
+
+  # ----------------------------------------------------- population assignment
+  method:
+    type: string
+    enum: ["admixture", "tess"]
+    default: "admixture"
+    description: >
+      Which ancestry estimate defines the populations used for all downstream
+      per-population statistics. "tess" requires run_tess.
+  manual_k_assignment:
+    type: ["integer", "null"]
+    default: null
+    minimum: 1
+    description: >
+      Number of populations to split samples into. null: use the best K chosen
+      automatically (cross-validation for ADMIXTURE, cross-entropy for TESS).
+      Inspect the composite PDF and set this explicitly for real analyses.
+  qvalue_threshold:
+    type: number
+    default: 0.8
+    description: >
+      Samples whose top ancestry coefficient is below this are treated as
+      admixed and excluded from all per-population statistics.
+
+  # ------------------------------------------------------------- per-pop stats
+  min_samples_per_pop:
+    type: integer
+    default: 2
+    description: Populations with fewer assigned samples are skipped.
+  roh_min_size:
+    type: integer
+    default: 500000
+    description: ROH shorter than this (bp) are ignored when computing F_ROH.
+  roh_merge_gap:
+    type: integer
+    default: 10000
+    description: Adjacent ROH separated by this many bp or fewer are merged.
+  pi_window:
+    type: integer
+    default: 10000
+    description: Window size (bp) for per-individual windowed pi.
+  min_scaffold_size:
+    type: integer
+    default: 10000000
+    description: >
+      Scaffolds shorter than this (bp) are excluded from genome-wide summaries
+      of pi/heterozygosity/F_ROH.
+
+  # -------------------------------------------------------------------- GONE
+  run_gone:
+    type: boolean
+    default: false
+    description: >
+      Estimate recent effective population size trajectories with GONE.
+      Off by default because GONE must be compiled and only runs on Linux.
+  gone_path:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Path to an existing GONE "Linux" directory (the one containing
+      script_GONE.sh and PROGRAMMES/). null: the workflow clones and builds
+      GONE into resources/GONE itself.
+  gone_seeds:
+    type: integer
+    default: 10
+    description: Number of independent GONE replicates per population.
+  gone_n_chroms:
+    type: integer
+    default: 5
+    description: GONE is run on this many of the largest scaffolds.
+
+  # -------------------------------------------------------------------- clam
+  run_clam:
+    type: boolean
+    default: true
+    description: >
+      Run clam for callable-site-aware pi, dxy, Fst and ROH-corrected
+      heterozygosity from GVCFs. Requires gvcf_dir.
+  gvcf_dir:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Required when run_clam is true. Directory holding one bgzipped, tabixed
+      GVCF per sample, named {sample}.g.vcf.gz (+ .tbi). May contain more
+      samples than the VCF; only assigned samples are read. May contain
+      {refGenome} and {prefix} placeholders.
+  clam_window:
+    type: integer
+    default: 50000
+    description: Window size (bp) for clam's windowed statistics.
+  clam_min_gq:
+    type: integer
+    default: 0
+    description: >
+      Minimum GQ for a GVCF depth value to count. 0 disables, matching the
+      rest of the workflow, which applies no GQ filter.
+  clam_mean_depth_sd_scale:
+    type: number
+    default: 2
+    description: >
+      Per-chromosome callable-depth bounds are mean +/- N*sqrt(mean) (Poisson
+      SD), computed across all samples and positions.
+  clam_depths_zarr_dir:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Where `clam collect` writes its per-sample depth store. null means
+      results/{refGenome}/clam/{prefix}/depths.zarr. This store is large
+      (~n_samples * genome_length * 4 bytes before compression); point it at
+      bulk storage for big projects. Must contain {refGenome} and {prefix}.
+  clam_keep_depths_zarr:
+    type: boolean
+    default: false
+    description: >
+      Keep the depth store after callable loci are computed. Useful when
+      iterating, since `clam collect` is the most expensive step.
+  clam_threads:
+    type: integer
+    default: 16
+    description: Threads for clam collect/loci/stat.
+
+required:
+  - final_prefix
+  - refgenome

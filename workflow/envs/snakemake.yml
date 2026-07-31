@@ -1,0 +1,10 @@
+# Environment for running the workflow itself. Every rule brings its own
+# environment, so this only needs Snakemake and a conda frontend.
+name: snakemake
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.11
+  - snakemake>=8
+  - snakemake-executor-plugin-slurm

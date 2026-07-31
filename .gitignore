@@ -1,0 +1,26 @@
+# Snakemake state
+.snakemake/
+
+# Conda environments built by --conda-prefix
+.conda*/
+
+# Workflow outputs, when the repo root is used as the working directory
+/results/
+/logs/
+/resources/
+
+# Outputs generated inside the bundled test project. Everything else under
+# .test/ is committed input data.
+.test/logs/
+.test/results/*/filter/
+.test/results/*/prepare/
+.test/results/*/structure/
+.test/results/*/populations/
+.test/results/*/clam/
+.test/results/*/*_clean_snps.vcf.gz*
+.test/results/*/*_clean_indels.vcf.gz*
+.test/results/*/*_excluded_positions.tsv.gz*
+
+# Editor / OS cruft
+.DS_Store
+*.swp

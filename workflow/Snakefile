@@ -1,0 +1,47 @@
+"""Population genomics workflow: filtered VCF -> ancestry -> per-population statistics.
+
+Pipeline:
+  filter      raw VCF -> clean biallelic SNP set          (skippable: start_from)
+  prepare     annotate IDs, attach coordinates, LD-prune, subsample
+  structure   PCA, ADMIXTURE, TESS (optional), composite figure
+  populations assign populations, sex-linked scaffold QC, ROH/F_ROH, pi, GONE
+  clam        callable-site-aware pi / dxy / Fst / ROH-corrected heterozygosity
+
+Expected inputs, relative to the working directory (--directory):
+  results/{refgenome}/{prefix}_raw.vcf.gz          (start_from: raw)
+  results/{refgenome}/{prefix}_samps.txt           samples to drop, one per line
+  results/{refgenome}/{prefix}_clean_snps.vcf.gz   (start_from: clean_snps)
+  results/{refgenome}/{prefix}_callable_sites.bed  (use_callable_sites_bed: true)
+  results/{refgenome}/data/genome/{refgenome}.fna.fai
+  a coordinate sheet (use_coords: true) and a GVCF directory (run_clam: true)
+
+See README.md for the full description and config/config.yaml for every knob.
+"""
+
+import os
+
+from snakemake.utils import min_version
+
+min_version("7.32")
+
+
+# Keep numeric wildcards numeric. Without this, population/K/seed wildcards can
+# absorb path fragments and make rules ambiguous.
+wildcard_constraints:
+    refGenome=r"[^/]+",
+    k=r"\d+",
+    K=r"\d+",
+    seed=r"\d+",
+
+
+include: "rules/common.smk"
+include: "rules/filter.smk"
+include: "rules/prepare.smk"
+include: "rules/structure.smk"
+include: "rules/populations.smk"
+include: "rules/clam.smk"
+
+
+rule all:
+    input:
+        workflow_targets(),

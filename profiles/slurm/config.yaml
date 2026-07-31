@@ -1,0 +1,13 @@
+# Example cluster profile. Requires snakemake-executor-plugin-slurm:
+#   pip install snakemake-executor-plugin-slurm
+#   snakemake --profile profiles/slurm --directory /path/to/project
+executor: slurm
+software-deployment-method: conda
+keep-going: True
+rerun-incomplete: True
+jobs: 50
+latency-wait: 60
+default-resources:
+  slurm_partition: "compute"
+  mem_mb: 8000
+  runtime: 720

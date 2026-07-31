@@ -1,0 +1,83 @@
+###############################################################################
+# Project configuration.
+#
+# Only final_prefix and refgenome are strictly required — everything else has a
+# default (see workflow/schemas/config.schema.yaml). The values below are the
+# defaults, spelled out so you can see what you are getting.
+#
+# Run with:
+#   snakemake --use-conda --cores 20 --configfile config/config.yaml
+###############################################################################
+
+# --- project ----------------------------------------------------------------
+# Inputs are looked up under results/{refgenome}/ relative to the working
+# directory (use --directory to point at a project folder).
+final_prefix: my-project
+refgenome: GCA_000000000.1
+
+# --- entry point ------------------------------------------------------------
+# raw        : start from results/{refgenome}/{final_prefix}_raw.vcf.gz
+#              and also requires results/{refgenome}/{final_prefix}_samps.txt
+#              (samples to drop; may be empty)
+# clean_snps : start from results/{refgenome}/{final_prefix}_clean_snps.vcf.gz
+start_from: raw
+exclude_samples: null         # e.g. results/GCA_000000000.1/my-project_samps.txt
+
+# A callable-sites BED, if you have one (snpArcher produces one). It restricts
+# which sites are kept AND provides the denominator for pi/heterozygosity.
+# With null, depth outliers are found in the VCF and the denominator is the
+# whole assembly length.
+callable_sites_bed: null
+min_contig_size: 0            # only applied when callable_sites_bed is set
+
+# --- coordinates ------------------------------------------------------------
+# Set use_coords to false to run the whole workflow with no coordinates at all.
+# TESS and every map panel are then skipped and populations come from ADMIXTURE.
+use_coords: true
+coords_sheet: config/coords.tsv
+drop_samples_without_coords: true
+
+# --- filtering --------------------------------------------------------------
+maf: 0.01
+missingness: 0.25
+scaffolds_to_exclude: ""     # e.g. "mtDNA,Y"
+cov_threshold_stdev: 2
+ld_r2: 0.6
+subsample_maf: 0.05
+
+# --- structure --------------------------------------------------------------
+admixture_kmax: 10
+admixture_seeds: [42, 420, 69, 666, 80085]
+run_tess: true
+tess_kvals: "1:10"
+
+# --- population assignment --------------------------------------------------
+# Start with manual_k_assignment: null, look at
+#   results/{refgenome}/structure/{prefix}_structure_composite.pdf,
+# then pin K here and rerun.
+method: admixture
+manual_k_assignment: null
+qvalue_threshold: 0.8
+
+# --- per-population statistics ---------------------------------------------
+min_samples_per_pop: 2
+roh_min_size: 500000
+roh_merge_gap: 10000
+pi_window: 10000
+min_scaffold_size: 10000000
+
+# --- GONE (recent Ne) -------------------------------------------------------
+run_gone: false
+gone_path: null              # null => cloned and built into resources/GONE
+gone_seeds: 10
+gone_n_chroms: 5
+
+# --- clam (callable-site aware pi/dxy/Fst/heterozygosity) -------------------
+run_clam: true
+gvcf_dir: null               # e.g. /path/to/gvcfs, holding {sample}.g.vcf.gz
+clam_window: 50000
+clam_min_gq: 0
+clam_mean_depth_sd_scale: 2
+clam_depths_zarr_dir: null   # e.g. /bulk/depths/{refGenome}/{prefix}
+clam_keep_depths_zarr: false
+clam_threads: 16

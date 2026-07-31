@@ -1,0 +1,30 @@
+# Test configuration: no coordinates at all.
+#
+#   snakemake --profile profiles/default --directory .test --configfile .test/config_nocoords.yaml
+#
+# TESS and every map panel drop out of the DAG; populations come from ADMIXTURE.
+# Everything else is identical to config.yaml, so comparing the two dry-runs
+# shows exactly what coordinates buy you.
+
+final_prefix: 59-Ursus
+refgenome: GCA_024610735.1
+
+start_from: raw
+exclude_samples: results/GCA_024610735.1/59-Ursus_samps.txt
+callable_sites_bed: results/GCA_024610735.1/59-Ursus_callable_sites.bed.gz
+
+use_coords: false
+
+admixture_kmax: 3
+admixture_seeds: [42, 43]
+run_tess: false
+
+method: admixture
+manual_k_assignment: 2
+qvalue_threshold: 0.8
+
+min_samples_per_pop: 2
+min_scaffold_size: 10000000
+
+run_gone: false
+run_clam: false

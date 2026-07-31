@@ -1,0 +1,9 @@
+name: clam_plot_env
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.13
+  - pandas=3.0.2
+  - numpy=2.4.3
+  - matplotlib-base=3.10.9

@@ -1,0 +1,15 @@
+name: clam_env
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - clam=1.1.4
+  - htslib=1.23.1
+  - bcftools=1.23.1
+  - pandas=3.0.2
+  - numpy=2.4.3
+  # zarr>=3 is required: clam writes Zarr v3 stores ("zarr_format": 3 in
+  # zarr.json), and zarr v2 cannot read them — its open() reports a misleading
+  # PathNotFoundError ('') against any v3 store.
+  - zarr=3.2.0
+  - dask=2026.3.0

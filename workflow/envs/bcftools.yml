@@ -1,0 +1,9 @@
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - bcftools==1.16
+  # merge_roh.py, which shares this environment, needs both of these
+  - pybedtools==0.10.0
+  - pandas==2.1.4
