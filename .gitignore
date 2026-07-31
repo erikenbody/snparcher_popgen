@@ -17,10 +17,11 @@
 .test/results/*/structure/
 .test/results/*/populations/
 .test/results/*/clam/
-.test/results/*/*_clean_snps.vcf.gz*
 .test/results/*/*_clean_indels.vcf.gz*
 .test/results/*/*_excluded_positions.tsv.gz*
 
 # Editor / OS cruft
 .DS_Store
 *.swp
+.test/results/*/*_raw.vcf.gz*
+Rplots.pdf

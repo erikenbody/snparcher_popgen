@@ -1,19 +1,20 @@
 """Population genomics workflow: filtered VCF -> ancestry -> per-population statistics.
 
 Pipeline:
-  filter      raw VCF -> clean biallelic SNP set          (skippable: start_from)
-  prepare     annotate IDs, attach coordinates, LD-prune, subsample
+  prepare     annotate IDs, attach coordinates, drop samples, LD-prune, subsample
   structure   PCA, ADMIXTURE, TESS (optional), composite figure
   populations assign populations, sex-linked scaffold QC, ROH/F_ROH, pi, GONE
   clam        callable-site-aware pi / dxy / Fst / ROH-corrected heterozygosity
 
+The input is a filtered, biallelic SNP VCF — snpArcher's _clean_snps.vcf.gz or
+anything equivalent. Site filtering (depth, missingness, MAF, callable regions)
+belongs to the variant caller and is deliberately not repeated here.
+
 Expected inputs, relative to the working directory (--directory):
-  results/{refgenome}/{prefix}_raw.vcf.gz          (start_from: raw)
-  results/{refgenome}/{prefix}_samps.txt           samples to drop, one per line
-  results/{refgenome}/{prefix}_clean_snps.vcf.gz   (start_from: clean_snps)
-  results/{refgenome}/{prefix}_callable_sites.bed  (use_callable_sites_bed: true)
+  results/{refgenome}/{prefix}_clean_snps.vcf.gz   required
   results/{refgenome}/data/genome/{refgenome}.fna.fai
   a coordinate sheet (use_coords: true) and a GVCF directory (run_clam: true)
+  a callable-sites BED (optional; the pi / heterozygosity denominator)
 
 See README.md for the full description and config/config.yaml for every knob.
 """
@@ -35,7 +36,6 @@ wildcard_constraints:
 
 
 include: "rules/common.smk"
-include: "rules/filter.smk"
 include: "rules/prepare.smk"
 include: "rules/structure.smk"
 include: "rules/populations.smk"

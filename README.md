@@ -17,10 +17,9 @@ whose output layout the input paths follow, but any joint-called VCF works.
 ## What it does
 
 ```
-                    raw VCF ──► filter ──► clean biallelic SNPs
-                                              │
-                                              ▼
-  coordinate sheet ─────────────────────► prepare ──► analysis sample set
+        clean biallelic SNP VCF ──┐
+                                  │
+  coordinate sheet ───────────────┴───► prepare ──► analysis sample set
                                               │        LD-pruned + subsampled SNPs
                                               │        distance matrices
                                               ▼
@@ -52,15 +51,31 @@ All paths are relative to the working directory, which you set with
 
 | Path | Required | Notes |
 |---|---|---|
-| `results/{refgenome}/{prefix}_raw.vcf.gz` | yes, when `start_from: raw` | joint-genotyped, indexed |
-| `results/{refgenome}/{prefix}_clean_snps.vcf.gz` | yes, when `start_from: clean_snps` | already filtered |
+| `results/{refgenome}/{prefix}_clean_snps.vcf.gz` | yes | filtered, biallelic SNPs |
 | `results/{refgenome}/data/genome/{refgenome}.fna.fai` | yes | reference index |
 | a coordinate sheet | when `use_coords: true` | see below |
 | a directory of GVCFs | when `run_clam: true` | `{sample}.g.vcf.gz` + `.tbi` |
-| a callable-sites BED | optional | improves pi/heterozygosity; see below |
+| a callable-sites BED | optional | the pi/heterozygosity denominator; see below |
 | a list of samples to drop | optional | `exclude_samples` |
 
 `{prefix}` is `final_prefix` and `{refgenome}` is `refgenome` from the config.
+
+### Filtering is not this workflow's job
+
+The input is an already-filtered SNP set. There is no filtering stage: depth,
+missingness, MAF and callable-region filtering all belong to the variant caller,
+where the evidence for them lives, and snpArcher already does them. Repeating
+that work here would mean two places to keep consistent and two ways to get it
+wrong.
+
+What the workflow does still remove, in `prepare`:
+
+- samples listed in `exclude_samples`, and samples with no coordinates
+- scaffolds listed in `scaffolds_to_exclude`
+- sex-linked and anomalous scaffolds, detected automatically in `populations`
+
+Allele counts and AF are recomputed after samples are dropped, so sites that
+became invariant do not linger.
 
 ### The coordinate sheet
 
@@ -85,22 +100,25 @@ it to `false` to make missing coordinates an error instead.
 ### Running without coordinates
 
 Set `use_coords: false`. TESS and every map panel leave the DAG, and populations
-are defined from ADMIXTURE alone. Everything else — filtering, PCA, ADMIXTURE,
-population assignment, ROH, F_ROH, pi, GONE, clam — is unaffected.
+are defined from ADMIXTURE alone. Everything else — PCA, ADMIXTURE, population
+assignment, ROH, F_ROH, pi, GONE, clam — is unaffected.
 
 TESS is spatially explicit and genuinely cannot run without coordinates; the
 workflow refuses `method: tess` in this mode rather than failing later inside R.
 
 ### The callable-sites BED
 
-Optional, and it does two things when supplied: restricts which sites survive
-filtering, and provides the denominator for pi and heterozygosity. Without it,
-depth outliers are identified from the VCF itself and the denominator is the
-summed length of every scaffold in the `.fai`. That second part matters —
-positions that were never callable stay in the denominator, so pi and
-heterozygosity come out biased low, and are not comparable to values computed
-with a callable-sites mask. The clam module does not have this problem: it
-derives callability per sample from the GVCFs.
+Optional, and it now does exactly one thing: it provides the denominator for pi
+and per-sample heterozygosity. Without it, the denominator is the summed length
+of every scaffold in the `.fai` — so positions that were never callable stay in
+the denominator, and pi and heterozygosity come out biased low and are not
+comparable to values computed with a callable-sites mask.
+
+The clam module does not use it, because it derives callability per sample from
+the GVCFs. So if you run clam, its statistics are properly denominated whether or
+not you supply a BED. The non-clam `pi`/`het` outputs are the ones that need it,
+and since clam is off by default, supplying a BED is worth it if you care about
+absolute values rather than relative comparisons within one project.
 
 ## Quick start
 
@@ -180,8 +198,8 @@ Under `results/{refgenome}/`:
 
 | Path | Contents |
 |---|---|
-| `{prefix}_clean_snps.vcf.gz` | filtered biallelic SNPs |
 | `prepare/{prefix}_analysis_set.vcf.gz` | the sample set every analysis uses |
+| `prepare/{prefix}_dropped_samples.txt` | samples removed, and why (see the log) |
 | `prepare/{prefix}_pruned_ld.vcf.gz` | LD-pruned SNPs |
 | `prepare/{prefix}_dist.dist` | pairwise distance matrix |
 | `structure/{prefix}.eigenvec` | PCA |
@@ -206,7 +224,7 @@ than it should.
 
 ## Test data
 
-`.test/` holds a 20-sample, 100k-variant subset of a black bear
+`.test/` holds a 17-sample, 78k-SNP subset of a black bear
 (*Ursus americanus*) dataset, with **synthetic** coordinates in two loose
 clusters. The coordinates are invented, not real localities. Results are
 meaningless; the purpose is to check that the workflow executes.

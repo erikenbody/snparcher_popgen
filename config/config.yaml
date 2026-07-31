@@ -15,20 +15,16 @@
 final_prefix: my-project
 refgenome: GCA_000000000.1
 
-# --- entry point ------------------------------------------------------------
-# raw        : start from results/{refgenome}/{final_prefix}_raw.vcf.gz
-#              and also requires results/{refgenome}/{final_prefix}_samps.txt
-#              (samples to drop; may be empty)
-# clean_snps : start from results/{refgenome}/{final_prefix}_clean_snps.vcf.gz
-start_from: raw
+# --- input ------------------------------------------------------------------
+# The workflow starts from results/{refgenome}/{final_prefix}_clean_snps.vcf.gz:
+# a filtered, biallelic SNP VCF. Site filtering is the variant caller's job.
 exclude_samples: null         # e.g. results/GCA_000000000.1/my-project_samps.txt
 
-# A callable-sites BED, if you have one (snpArcher produces one). It restricts
-# which sites are kept AND provides the denominator for pi/heterozygosity.
-# With null, depth outliers are found in the VCF and the denominator is the
-# whole assembly length.
+# A callable-sites BED, if you have one (snpArcher produces one). Its only job is
+# to provide the denominator for pi and heterozygosity. With null the denominator
+# is the whole assembly length, which biases both low. clam does not need it — it
+# derives callability from the GVCFs.
 callable_sites_bed: null
-min_contig_size: 0            # only applied when callable_sites_bed is set
 
 # --- coordinates ------------------------------------------------------------
 # Set use_coords to false to run the whole workflow with no coordinates at all.
@@ -37,11 +33,9 @@ use_coords: true
 coords_sheet: config/coords.tsv
 drop_samples_without_coords: true
 
-# --- filtering --------------------------------------------------------------
-maf: 0.01
-missingness: 0.25
-scaffolds_to_exclude: ""     # e.g. "mtDNA,Y"
-cov_threshold_stdev: 2
+# --- SNP subsetting ---------------------------------------------------------
+scaffolds_to_exclude: ""     # e.g. "mtDNA,Y"; sex-linked ones are found for you
+missingness: 0.25            # applied to the ADMIXTURE/TESS subsample
 ld_r2: 0.6
 subsample_maf: 0.05
 

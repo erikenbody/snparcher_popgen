@@ -145,7 +145,7 @@ rule population_vcf:
         "logs/{refGenome}/populations/{prefix}_population_vcf_{k}.log",
     shell:
         """
-        exec 2> {log}
+        exec > {log} 2>&1
         # bcftools rejects an empty -T file ("Failed to read the targets"), so
         # the exclusion is only applied when there is something to exclude.
         EXC_ARG=""

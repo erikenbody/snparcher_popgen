@@ -13,49 +13,34 @@ properties:
   final_prefix:
     type: string
     description: >
-      Prefix of the input VCF and of every output file. Input is expected at
-      results/{refgenome}/{final_prefix}_raw.vcf.gz (or _clean_snps.vcf.gz when
-      start_from is clean_snps).
+      Prefix of the input VCF and of every output file. The input VCF is expected
+      at results/{refgenome}/{final_prefix}_clean_snps.vcf.gz.
   refgenome:
     type: string
     description: >
       Reference genome accession/name. Used only as a directory level inside
       results/ and to locate results/{refgenome}/data/genome/{refgenome}.fna.fai.
 
-  # -------------------------------------------------------------- entry point
-  start_from:
-    type: string
-    enum: ["raw", "clean_snps"]
-    default: "raw"
-    description: >
-      raw: filter results/{refgenome}/{final_prefix}_raw.vcf.gz down to
-      _clean_snps.vcf.gz inside this workflow.
-      clean_snps: you already have results/{refgenome}/{final_prefix}_clean_snps.vcf.gz
-      (e.g. from snpArcher) and filtering is skipped.
+  # ------------------------------------------------------------------- inputs
   callable_sites_bed:
     type: ["string", "null"]
     default: null
     description: >
       Optional path to a BED of callable sites (e.g. snpArcher's
-      {prefix}_callable_sites.bed). Used for two things: variants are restricted
-      to these regions during filtering (instead of the depth-outlier filter),
-      and the total callable length becomes the denominator for pi and
-      heterozygosity. When null, depth outliers are identified from the VCF
-      itself and the denominator is the summed length of all scaffolds in the
-      .fai, which inflates the denominator by however much of the genome was
-      never callable.
+      {prefix}_callable_sites.bed). Its only job is to provide the denominator
+      for pi and per-sample heterozygosity. When null, that denominator is the
+      summed length of all scaffolds in the .fai, which is inflated by however
+      much of the genome was never callable, so pi and heterozygosity come out
+      biased low and are not comparable across projects. The clam module does not
+      use this: it derives callability per sample from the GVCFs.
   exclude_samples:
     type: ["string", "null"]
     default: null
     description: >
-      Optional path to a file listing samples to drop from the raw VCF, one per
-      line (e.g. samples that failed QC). null keeps every sample.
-  min_contig_size:
-    type: integer
-    default: 0
-    description: >
-      Only used when use_callable_sites_bed is true. Variants on contigs shorter
-      than this (bp) are dropped. 0 keeps every contig.
+      Optional path to a file listing samples to drop, one per line (e.g. samples
+      that failed QC). Applied when building the analysis set, alongside samples
+      dropped for having no coordinates. Names not present in the VCF are
+      reported in the log and ignored. null keeps every sample.
 
   # ------------------------------------------------------------- coordinates
   use_coords:
@@ -81,28 +66,22 @@ properties:
       downstream analysis sees the same sample set. false: keep them, and error
       out instead if any sample lacks coordinates.
 
-  # ---------------------------------------------------------------- filtering
-  maf:
-    type: number
-    default: 0.01
-    description: SNPs below this minor allele frequency are dropped. 0 disables.
-  missingness:
-    type: number
-    default: 0.25
-    description: SNPs with more than this fraction of missing calls are dropped. 1 disables.
+  # ----------------------------------------------------------- SNP subsetting
   scaffolds_to_exclude:
     type: string
     default: ""
     description: >
-      Comma-separated, no spaces (e.g. "mtDNA,Y"). Excluded from the clean VCFs.
-      Empty string disables.
-  cov_threshold_stdev:
+      Comma-separated, no spaces (e.g. "mtDNA,Y"). Dropped when building the
+      analysis set. Empty string disables. Sex-linked and anomalous scaffolds are
+      detected and excluded automatically as well — this is for scaffolds you
+      already know you do not want.
+  missingness:
     type: number
-    default: 2
+    default: 0.25
     description: >
-      Sites whose total depth deviates by more than this many standard
-      deviations from the mean are excluded. Only used when
-      use_callable_sites_bed is false.
+      Applied when building the ~1M SNP subsample for ADMIXTURE and TESS: SNPs
+      with more than this fraction of missing calls are dropped. 1 disables.
+      Site-level filtering of the input VCF is the variant caller's job.
   ld_r2:
     type: number
     default: 0.6

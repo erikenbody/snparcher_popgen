@@ -21,8 +21,24 @@ validate(config, os.path.join(workflow.basedir, "schemas/config.schema.yaml"))
 PREFIX = config["final_prefix"]
 REF = config["refgenome"]
 
+# --------------------------------------------------------------------- input
+# The filtered SNP set is this workflow's input: no rule produces it. Checking it
+# here means a missing or mistyped path is reported as itself, rather than as a
+# MissingInputException several rules deep.
+CLEAN_SNPS = f"results/{REF}/{PREFIX}_clean_snps.vcf.gz"
+if not Path(CLEAN_SNPS).exists():
+    raise WorkflowError(
+        f"input VCF not found: {CLEAN_SNPS}\n"
+        "This workflow starts from a filtered, biallelic SNP VCF — for example "
+        "snpArcher's {prefix}_clean_snps.vcf.gz. Site filtering (depth, "
+        "missingness, MAF, callable regions) is the variant caller's job, not "
+        "this workflow's.\n"
+        "The path is built from refgenome and final_prefix, and is interpreted "
+        "relative to the working directory (the --directory argument, if you "
+        "passed one)."
+    )
+
 # --------------------------------------------------------------------- modes
-START_FROM = config["start_from"]
 CALLABLE_BED = config["callable_sites_bed"]
 USE_BED = bool(CALLABLE_BED)
 USE_COORDS = bool(config["use_coords"])
