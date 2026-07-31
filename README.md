@@ -285,3 +285,7 @@ California-specific data or CCGP infrastructure:
 This workflow orchestrates other people's software. If you publish results,
 cite: bcftools/samtools, PLINK, ADMIXTURE, VCFtools, scikit-allel, TESS3 and
 algatr, GONE, and clam.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
