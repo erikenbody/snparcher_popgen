@@ -8,6 +8,16 @@ suppressMessages(library(gridExtra))
 suppressMessages(library(ggridges))
 suppressMessages(library(GenomicRanges))
 
+log_smk <- function() {
+  if (exists("snakemake") && length(snakemake@log) != 0) {
+    log <- file(snakemake@log[1][[1]], open = "wt")
+    sink(log, append = TRUE)
+    sink(log, append = TRUE, type = "message")
+  }
+}
+
+log_smk()
+
 # --- Get inputs from Snakemake ---
 roh_path   <- snakemake@input$roh
 top_path   <- snakemake@input$top
