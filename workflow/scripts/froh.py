@@ -12,10 +12,19 @@ import tempfile
 import psutil
 import os
 
-def calc_roh(roh, fai, output, population, min_roh_size):
+def calc_roh(roh, fai, output, population, min_roh_size, min_scaffold_size):
     dffai = pd.read_table(fai, sep='\t', header=None)
-    dffai = dffai[dffai[1] > 10000000]  # only include chromosomes gr 1Mbp
+    # Restrict to long scaffolds: F_ROH is a fraction of the genome, and short
+    # scaffolds contribute length to the denominator while being too short to
+    # detect a run of homozygosity in.
+    dffai = dffai[dffai[1] > int(min_scaffold_size)]
     chroms = dffai[0].values
+
+    if dffai.empty:
+        raise SystemExit(
+            f"no scaffolds longer than min_scaffold_size ({min_scaffold_size} bp) "
+            f"in {fai}; lower min_scaffold_size for this assembly"
+        )
 
     glength = dffai[1].sum()
     
@@ -63,8 +72,10 @@ def main():
     froh_output = snakemake.output["froh"]
     population = snakemake.params["population"]
     min_roh_size = snakemake.params["min_roh_size"]
+    min_scaffold_size = snakemake.params["min_scaffold_size"]
 
-    calc_roh(roh_input, fai_input, froh_output, population, min_roh_size)
+    calc_roh(roh_input, fai_input, froh_output, population, min_roh_size,
+             min_scaffold_size)
 
 if __name__ == "__main__":
     main()

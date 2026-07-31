@@ -214,6 +214,7 @@ rule froh:
     params:
         population="{k}",
         min_roh_size=config["roh_min_size"],
+        min_scaffold_size=config["min_scaffold_size"],
     conda:
         "../envs/froh.yml"
     log:
