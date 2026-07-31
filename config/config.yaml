@@ -73,7 +73,7 @@ gone_seeds: 10
 gone_n_chroms: 5
 
 # --- clam (callable-site aware pi/dxy/Fst/heterozygosity) -------------------
-run_clam: true
+run_clam: false              # needs per-sample GVCFs; set gvcf_dir when enabling
 gvcf_dir: null               # e.g. /path/to/gvcfs, holding {sample}.g.vcf.gz
 clam_window: 50000
 clam_min_gq: 0

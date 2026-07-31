@@ -210,10 +210,11 @@ properties:
   # -------------------------------------------------------------------- clam
   run_clam:
     type: boolean
-    default: true
+    default: false
     description: >
       Run clam for callable-site-aware pi, dxy, Fst and ROH-corrected
-      heterozygosity from GVCFs. Requires gvcf_dir.
+      heterozygosity from GVCFs. Off by default because it needs per-sample
+      GVCFs, which many projects will not have kept. Requires gvcf_dir.
   gvcf_dir:
     type: ["string", "null"]
     default: null

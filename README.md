@@ -149,8 +149,12 @@ out. A minimal config is:
 final_prefix: my-project
 refgenome: GCA_000000000.1
 use_coords: false
-run_clam: false
 ```
+
+The two optional modules are off by default: set `run_clam: true` (with
+`gvcf_dir`) for callable-site statistics, and `run_gone: true` for recent Ne.
+Coordinate-based analyses are on by default, so `use_coords: false` is what you
+add when you have no coordinates.
 
 The options worth thinking about before a real run:
 
@@ -217,14 +221,11 @@ snakemake --directory .test --configfile .test/config_nocoords.yaml \
           --software-deployment-method conda --cores 8
 ```
 
-Both paths have been run to completion on this data. Both test configs set
-`run_clam: false`, because per-sample GVCFs are far too large to ship in a
-repository. To exercise clam, point `gvcf_dir` at real GVCFs for the samples in
-your own dataset.
-
-`run_gone: false` as well: GONE needs to be cloned and built, and the test slice
-has nowhere near enough linked variants for LD-based Ne inference to mean
-anything.
+Both paths have been run to completion on this data. Neither test config enables
+clam or GONE: per-sample GVCFs are far too large to ship in a repository, and the
+test slice has nowhere near enough linked variants for LD-based Ne inference to
+mean anything. To exercise clam, point `gvcf_dir` at real GVCFs for the samples
+in your own dataset.
 
 ## Software
 
