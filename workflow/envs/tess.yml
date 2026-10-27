@@ -1,0 +1,21 @@
+# TESS3 via tess3r. tess3r itself is only on GitHub, so rule tess_env compiles it
+# into this environment (pinned by tess3r_ref); everything it needs to do that —
+# Rcpp, RcppEigen and a C++ toolchain — is here. Replaces the old algatr
+# environment, which pulled in the geospatial stack (terra, sf, rgdal, ...) for
+# kriging and environmental layers that this workflow does not use.
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base=4.4.3
+  - r-dplyr=1.2.1
+  - r-tidyr=1.3.2
+  - r-readr=2.2.0
+  - r-ggplot2=4.0.3
+  - r-vcfr=1.16.0
+  - r-adegenet=2.1.11
+  - r-remotes=2.5.0
+  - r-rcpp=1.1.2
+  - r-rcppeigen=0.3.4.0.2
+  - cxx-compiler=2.0.0
+  - make=4.4.1

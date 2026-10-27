@@ -6,7 +6,7 @@ spatially-explicit counterpart and only exists when coordinates are available.
 
 The composite PDF is the figure to look at before choosing manual_k_assignment.
 
-Outputs:
+Outputs, under {outdir}/structure/:
   {prefix}.eigenvec / .eigenval                PCA
   admixture/Q_files/{prefix}.{K}.{seed}.Q      ancestry proportions
   {prefix}_best_K.txt                          CV scores, best K, Evanno dK
@@ -18,10 +18,10 @@ Outputs:
 
 rule pca:
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz",
+        vcf=out("prepare/{prefix}_subsampled.vcf.gz"),
     output:
-        eigenvec="results/{refGenome}/structure/{prefix}.eigenvec",
-        eigenval="results/{refGenome}/structure/{prefix}.eigenval",
+        eigenvec=out("structure/{prefix}.eigenvec"),
+        eigenval=out("structure/{prefix}.eigenval"),
     params:
         out=lambda wc, output: output.eigenvec[: -len(".eigenvec")],
     resources:
@@ -29,7 +29,7 @@ rule pca:
     conda:
         "../envs/plink.yml"
     log:
-        "logs/{refGenome}/structure/{prefix}_pca.log",
+        logp("structure/{prefix}_pca.log"),
     shell:
         """
         plink2 --vcf {input.vcf} --pca 10 --out {params.out} \
@@ -45,20 +45,17 @@ rule admixture_plink_input:
     means neither rule mutates its own input.
     """
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz",
+        vcf=out("prepare/{prefix}_subsampled.vcf.gz"),
     output:
-        bed="results/{refGenome}/structure/admixture/{prefix}.bed",
-        # NOT "{prefix}.orig.bim": that filename is itself matched by the
-        # "{prefix}.bim" output of admixture_integer_contigs, which makes the two
-        # rules mutually ambiguous and sends DAG resolution into recursion.
-        bim_orig="results/{refGenome}/structure/admixture/{prefix}.bim.orig",
-        fam="results/{refGenome}/structure/admixture/{prefix}.fam",
+        bed=out("structure/admixture/{prefix}.bed"),
+        bim_orig=out("structure/admixture/{prefix}.bim.orig"),
+        fam=out("structure/admixture/{prefix}.fam"),
     params:
         out=lambda wc, output: output.bed[: -len(".bed")],
     conda:
         "../envs/admixture.yml"
     log:
-        "logs/{refGenome}/structure/{prefix}_admixture_input.log",
+        logp("structure/{prefix}_admixture_input.log"),
     shell:
         """
         plink --vcf {input.vcf} --make-bed --out {params.out} \
@@ -70,28 +67,30 @@ rule admixture_plink_input:
 rule admixture_integer_contigs:
     """Renumber contigs 1..n in the .bim; ADMIXTURE rejects names."""
     input:
-        bim="results/{refGenome}/structure/admixture/{prefix}.bim.orig",
-        fai="results/{refGenome}/data/genome/{refGenome}.fna.fai",
+        bim=out("structure/admixture/{prefix}.bim.orig"),
+        fai=CONTIGS,
     output:
-        bim="results/{refGenome}/structure/admixture/{prefix}.bim",
+        bim=out("structure/admixture/{prefix}.bim"),
     log:
-        "logs/{refGenome}/structure/{prefix}_admixture_bim.log",
+        logp("structure/{prefix}_admixture_bim.log"),
     script:
         "../scripts/contigs4admixture.py"
 
 
 rule admixture:
     input:
-        bed="results/{refGenome}/structure/admixture/{prefix}.bed",
-        bim="results/{refGenome}/structure/admixture/{prefix}.bim",
-        fam="results/{refGenome}/structure/admixture/{prefix}.fam",
+        bed=out("structure/admixture/{prefix}.bed"),
+        bim=out("structure/admixture/{prefix}.bim"),
+        fam=out("structure/admixture/{prefix}.fam"),
     output:
-        Q="results/{refGenome}/structure/admixture/Q_files/{prefix}.{K}.{seed}.Q",
-        P="results/{refGenome}/structure/admixture/P_files/{prefix}.{K}.{seed}.P",
+        Q=out("structure/admixture/Q_files/{prefix}.{K}.{seed}.Q"),
+        # Allele frequencies; nothing downstream reads them.
+        P=temp(out("structure/admixture/P_files/{prefix}.{K}.{seed}.P")),
     log:
         # Parsed by admixture_cloud.R for CV scores, so the _K{K}_seed{seed}.log
         # shape matters.
-        "results/{refGenome}/structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log",
+        out("structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log"),
+    threads: 4
     conda:
         "../envs/admixture.yml"
     shell:
@@ -108,7 +107,7 @@ rule admixture:
         TMP=$(mktemp -d)
         trap 'rm -rf $TMP' EXIT
         cd $TMP
-        admixture --cv=5 --seed={wildcards.seed} $BED {wildcards.K} > $LOG 2>&1
+        admixture --cv=5 -j{threads} --seed={wildcards.seed} $BED {wildcards.K} > $LOG 2>&1
 
         BASE=$(basename $BED .bed)
         mv $BASE.{wildcards.K}.P $POUT
@@ -120,88 +119,85 @@ rule admixture_best_k:
     """Cross-validation scores across all K and seeds, plus Evanno's delta K."""
     input:
         logs=expand(
-            "results/{{refGenome}}/structure/admixture/logs/{{prefix}}_admix_K{K}_seed{seed}.log",
+            out("structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log"),
             K=ADMIX_K,
             seed=ADMIX_SEEDS,
         ),
     output:
-        best_k="results/{refGenome}/structure/admixture/logs/{prefix}_best_K.txt",
-        cv_plot="results/{refGenome}/structure/admixture/logs/{prefix}_admixture_cv.png",
-        deltak_plot="results/{refGenome}/structure/admixture/logs/{prefix}_admixture_deltak.png",
+        best_k=out("structure/admixture/logs/{prefix}_best_K.txt"),
+        cv_plot=out("structure/admixture/logs/{prefix}_admixture_cv.png"),
+        deltak_plot=out("structure/admixture/logs/{prefix}_admixture_deltak.png"),
     params:
-        species=lambda wc: wc.prefix,
+        species=PREFIX,
         # admixture_cloud.R globs *.log in this directory; it must end in "/".
-        output_path=lambda wc: f"results/{wc.refGenome}/structure/admixture/logs/",
+        output_path=out("structure/admixture/logs/"),
     conda:
         "../envs/pie.yml"
     log:
-        "logs/{refGenome}/structure/{prefix}_best_k.log",
+        logp("structure/{prefix}_best_k.log"),
     script:
         "../scripts/admixture_cloud.R"
 
 
 if RUN_TESS:
 
-    rule algatr_env:
-        """Install the R packages that are not on conda (algatr, wingen, tess3r).
+    rule tess_env:
+        """Install tess3r, the one package TESS needs that is not on conda.
 
-        Kept as its own rule because the install is slow and easy to get wrong;
-        doing it once up front makes failures obvious.
+        It is a small Rcpp package, so this is a quick compile. With a shared
+        --conda-prefix it happens once per environment rather than per project;
+        the check makes later projects a no-op.
         """
-        input:
-            vcf="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz",
         output:
-            done="results/{refGenome}/structure/{prefix}_algatr_env.txt",
+            done=out("structure/{prefix}_tess_env.txt"),
+        params:
+            ref=config["tess3r_ref"],
         conda:
-            "../envs/algatr.yml"
+            "../envs/tess.yml"
         log:
-            "logs/{refGenome}/structure/{prefix}_algatr_env.log",
+            logp("structure/{prefix}_tess_env.log"),
         script:
-            "../scripts/setup_algatr_env.R"
+            "../scripts/setup_tess_env.R"
 
     rule tess:
-        """Spatially-explicit ancestry (TESS3), over tess_kvals."""
+        """Spatially-explicit ancestry (TESS3) over tess_kvals, with the
+        cross-entropy K selection that algatr's tess_ktest(K_selection="auto")
+        used."""
         input:
-            vcf="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz",
-            vcf_idx="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz.csi",
-            eigenvec="results/{refGenome}/structure/{prefix}.eigenvec",
-            env="results/{refGenome}/structure/{prefix}_algatr_env.txt",
-            coords="results/{refGenome}/prepare/{prefix}.coords.txt",
+            vcf=out("prepare/{prefix}_subsampled.vcf.gz"),
+            coords=out("prepare/{prefix}.coords.txt"),
+            env=out("structure/{prefix}_tess_env.txt"),
         output:
-            qmatrix="results/{refGenome}/structure/{prefix}_TESS_qmatrix.csv",
-            xval="results/{refGenome}/structure/{prefix}_TESS_xval.csv",
-            peakram="results/{refGenome}/structure/{prefix}_TESS_peakRAM.csv",
-            xval_plot="results/{refGenome}/structure/{prefix}_TESS_xval.png",
+            qmatrix=out("structure/{prefix}_TESS_qmatrix.csv"),
+            xval=out("structure/{prefix}_TESS_xval.csv"),
+            xval_plot=out("structure/{prefix}_TESS_xval.png"),
         params:
-            # positional, in this order: species, data_path, rmislands, kvals,
-            # output_path, incl_env
-            species=lambda wc: wc.prefix,
-            data_path=lambda wc: f"results/{wc.refGenome}/",
-            rmislands="false",
+            species=PREFIX,
             kvals=config["tess_kvals"],
-            output_path=lambda wc: f"results/{wc.refGenome}/structure/",
-            incl_env="false",
+            seed=config["tess_seed"],
         resources:
             mem_mb=lambda wildcards, attempt: attempt * 8000,
         conda:
-            "../envs/algatr.yml"
+            "../envs/tess.yml"
         log:
-            "logs/{refGenome}/structure/{prefix}_tess.log",
+            logp("structure/{prefix}_tess.log"),
+        benchmark:
+            logp("structure/{prefix}_tess.benchmark.tsv")
         script:
-            "../scripts/TESS_cloud.R"
+            "../scripts/run_tess.R"
 
     rule tess_pieplot:
         input:
-            tess="results/{refGenome}/structure/{prefix}_TESS_qmatrix.csv",
-            coords="results/{refGenome}/prepare/{prefix}.coords.txt",
+            tess=out("structure/{prefix}_TESS_qmatrix.csv"),
+            coords=out("prepare/{prefix}.coords.txt"),
         output:
-            plot="results/{refGenome}/structure/{prefix}_TESS_pieplot.pdf",
+            plot=out("structure/{prefix}_TESS_pieplot.pdf"),
         params:
-            species=lambda wc: wc.prefix,
+            species=PREFIX,
         conda:
             "../envs/pie.yml"
         log:
-            "logs/{refGenome}/structure/{prefix}_tess_pieplot.log",
+            logp("structure/{prefix}_tess_pieplot.log"),
         script:
             "../scripts/pie_plot.R"
 
@@ -214,38 +210,28 @@ rule structure_composite:
     ADMIXTURE-vs-TESS agreement panels need TESS.
     """
     input:
-        unpack(
-            lambda wc: {
-                "cv_errors": f"results/{wc.refGenome}/structure/admixture/logs/{wc.prefix}_best_K.txt",
-                "cv_plot": f"results/{wc.refGenome}/structure/admixture/logs/{wc.prefix}_admixture_cv.png",
-                "deltak_plot": f"results/{wc.refGenome}/structure/admixture/logs/{wc.prefix}_admixture_deltak.png",
-                "eigenvec": f"results/{wc.refGenome}/structure/{wc.prefix}.eigenvec",
-                "eigenval": f"results/{wc.refGenome}/structure/{wc.prefix}.eigenval",
-                "fam": f"results/{wc.refGenome}/structure/admixture/{wc.prefix}.fam",
-                "coords": f"results/{wc.refGenome}/prepare/{wc.prefix}.coords.txt",
-                "admixture_logs": expand(
-                    "results/{refGenome}/structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log",
-                    refGenome=wc.refGenome, prefix=wc.prefix, K=ADMIX_K, seed=[PLOT_SEED],
-                ),
-                "admixture_q": expand(
-                    "results/{refGenome}/structure/admixture/Q_files/{prefix}.{K}.{seed}.Q",
-                    refGenome=wc.refGenome, prefix=wc.prefix, K=ADMIX_K, seed=[PLOT_SEED],
-                ),
-                **(
-                    {
-                        "tess": f"results/{wc.refGenome}/structure/{wc.prefix}_TESS_qmatrix.csv",
-                        "xval": f"results/{wc.refGenome}/structure/{wc.prefix}_TESS_xval.csv",
-                    }
-                    if RUN_TESS
-                    else {}
-                ),
-            }
+        cv_errors=out("structure/admixture/logs/{prefix}_best_K.txt"),
+        cv_plot=out("structure/admixture/logs/{prefix}_admixture_cv.png"),
+        deltak_plot=out("structure/admixture/logs/{prefix}_admixture_deltak.png"),
+        eigenvec=out("structure/{prefix}.eigenvec"),
+        eigenval=out("structure/{prefix}.eigenval"),
+        fam=out("structure/admixture/{prefix}.fam"),
+        coords=out("prepare/{prefix}.coords.txt"),
+        admixture_logs=expand(
+            out("structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log"),
+            K=ADMIX_K, seed=[PLOT_SEED],
         ),
+        admixture_q=expand(
+            out("structure/admixture/Q_files/{prefix}.{K}.{seed}.Q"),
+            K=ADMIX_K, seed=[PLOT_SEED],
+        ),
+        tess=[out("structure/{prefix}_TESS_qmatrix.csv")] if RUN_TESS else [],
+        xval=[out("structure/{prefix}_TESS_xval.csv")] if RUN_TESS else [],
     output:
-        pdf="results/{refGenome}/structure/{prefix}_structure_composite.pdf",
-        merged="results/{refGenome}/structure/{prefix}_admixture_tess_merged.csv",
+        pdf=out("structure/{prefix}_structure_composite.pdf"),
+        merged=out("structure/{prefix}_admixture_tess_merged.csv"),
     params:
-        admixture_path=lambda wc: f"results/{wc.refGenome}/structure/admixture/Q_files/{wc.prefix}",
+        admixture_path=out("structure/admixture/Q_files/{prefix}"),
         plot_seed=PLOT_SEED,
         use_coords=USE_COORDS,
         run_tess=RUN_TESS,
@@ -253,6 +239,6 @@ rule structure_composite:
     conda:
         "../envs/pie.yml"
     log:
-        "logs/{refGenome}/structure/{prefix}_structure_composite.log",
+        logp("structure/{prefix}_structure_composite.log"),
     script:
         "../scripts/structure_composite.R"

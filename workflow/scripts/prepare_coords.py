@@ -1,6 +1,8 @@
 """Validate a user-supplied coordinate sheet against the VCF sample list.
 
-Reads a tab-delimited sheet with a header row and writes two files:
+Reads a sheet with a header row — comma-delimited if the file name ends in
+.csv (so snpArcher's sample_metadata.csv works as is), tab-delimited
+otherwise — and writes two files:
 
   coords      headerless TSV of sample<TAB>longitude<TAB>latitude, restricted to
               samples present in the VCF and in VCF order. This is the format
@@ -49,14 +51,15 @@ def find_column(header, aliases, what, path):
         f"no {what} column found in {path}\n"
         f"  header seen     : {header}\n"
         f"  accepted names  : {', '.join(sorted(aliases))}\n"
-        "The sheet must be TAB-delimited and have a header row."
+        "The sheet must have a header row, and be comma-delimited if named *.csv, tab-delimited otherwise."
     )
 
 
 def read_sheet(path):
     """{sample: (lon, lat)} plus the list of samples whose coordinates were blank."""
+    delimiter = "," if path.lower().endswith(".csv") else "\t"
     with open(path, newline="") as fh:
-        rows = list(csv.reader(fh, delimiter="\t"))
+        rows = list(csv.reader(fh, delimiter=delimiter))
 
     rows = [r for r in rows if r and any(field.strip() for field in r)]
     if not rows:
@@ -65,7 +68,7 @@ def read_sheet(path):
     header = rows[0]
     if len(header) < 3:
         die(
-            f"{path} looks like it is not tab-delimited: the header row split into "
+            f"{path} looks like it is not {'comma' if delimiter == ',' else 'tab'}-delimited: the header row split into "
             f"{len(header)} field(s): {header}"
         )
 

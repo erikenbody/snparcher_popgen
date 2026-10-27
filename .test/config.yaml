@@ -1,15 +1,19 @@
-# Test configuration: coordinates available, TESS on, clam and GONE off.
+# Test configuration: coordinates available; TESS, Ne and the track hub on,
+# clam off.
 #
-#   snakemake --profile profiles/default --directory .test --configfile .test/config.yaml
+#   snakemake --directory .test --configfile .test/config.yaml \
+#             --software-deployment-method conda --cores 8
 #
 # The data is a 17-sample, 78k-SNP subset of a black bear dataset. The
 # coordinates are synthetic (two loose clusters), not real localities, so results
-# are meaningless — this exists to check that the workflow runs.
+# are meaningless — this exists to check that the workflow runs. Contig lengths
+# come from the VCF header here (no fai); config_nocoords.yaml uses the .fai.
+
+vcf: results/GCA_024610735.1/59-Ursus_clean_snps.vcf.gz
+callable_sites_bed: results/GCA_024610735.1/59-Ursus_callable_sites.bed.gz
 
 final_prefix: 59-Ursus
 refgenome: GCA_024610735.1
-
-callable_sites_bed: results/GCA_024610735.1/59-Ursus_callable_sites.bed.gz
 
 use_coords: true
 coords_sheet: coords.tsv
@@ -28,5 +32,12 @@ qvalue_threshold: 0.8
 min_samples_per_pop: 2
 min_scaffold_size: 10000000
 
-run_gone: false
+# A handful of samples per population is far below what GONE2/currentNe2 need
+# for a meaningful estimate; this only checks that they build, run and are
+# summarised (including runs that fail).
+run_ne: true
+
 run_clam: false
+
+run_trackhub: true
+trackhub_email: test@example.com

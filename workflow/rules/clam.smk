@@ -18,7 +18,7 @@ compression. It is deleted once callable loci are computed unless
 clam_keep_depths_zarr is set; point clam_depths_zarr_dir at bulk storage for
 large projects.
 
-Outputs, under results/{refGenome}/clam/{prefix}/:
+Outputs, under {outdir}/clam/:
   {prefix}_pi.tsv, {prefix}_heterozygosity.tsv      per window
   {prefix}_dxy.tsv, {prefix}_fst.tsv                per window, K >= 2 only
   {prefix}_summary_per_pop.csv                      genome-wide, per population
@@ -43,8 +43,8 @@ if RUN_CLAM:
         replaced GVCF triggers a rerun, and a missing one fails during DAG
         construction with a useful message rather than deep inside clam.
         """
-        active_k(wc)  # gate on the assignment checkpoint
-        pops = population_files(wc.refGenome, wc.prefix)
+        active_k()  # gate on the assignment checkpoint
+        pops = population_files()
         samples = [s for ss in pops.values() for s in ss]
         directory_ = gvcf_dir()
         files = []
@@ -73,12 +73,12 @@ if RUN_CLAM:
     rule clam_samples_tsv:
         """clam's --samples table: sample_name, file_path, population."""
         input:
-            pops_done="results/{refGenome}/populations/{prefix}_populations-done.txt",
+            pops_done=out("populations/{prefix}_populations-done.txt"),
         output:
-            samples_tsv="results/{refGenome}/clam/{prefix}/samples.tsv",
-            n_pops="results/{refGenome}/clam/{prefix}/n_populations.txt",
+            samples_tsv=out("clam/samples.tsv"),
+            n_pops=out("clam/n_populations.txt"),
         run:
-            pops = population_files(wildcards.refGenome, wildcards.prefix)
+            pops = population_files()
             directory_ = gvcf_dir()
             rows = ["sample_name\tfile_path\tpopulation"]
             for pop, samples in sorted(pops.items(), key=lambda kv: int(kv[0])):
@@ -92,8 +92,8 @@ if RUN_CLAM:
         """Per-sample per-base depth from the GVCFs into a zarr store."""
         input:
             gvcfs=clam_gvcf_inputs,
-            samples_tsv="results/{refGenome}/clam/{prefix}/samples.tsv",
-            exclude_file="results/{refGenome}/populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt",
+            samples_tsv=out("clam/samples.tsv"),
+            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
         output:
             depths_zarr=_depths_zarr_output(DEPTHS_ZARR),
         params:
@@ -102,7 +102,7 @@ if RUN_CLAM:
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_collect.log",
+            logp("clam/{prefix}_collect.log"),
         shell:
             """
             rm -rf {output.depths_zarr}
@@ -127,16 +127,16 @@ if RUN_CLAM:
         """
         input:
             depths_zarr=DEPTHS_ZARR,
-            exclude_file="results/{refGenome}/populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt",
+            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
         output:
-            thresholds="results/{refGenome}/clam/{prefix}/thresholds.tsv",
+            thresholds=out("clam/thresholds.tsv"),
         params:
             sd_scale=config["clam_mean_depth_sd_scale"],
         threads: 4
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_thresholds.log",
+            logp("clam/{prefix}_thresholds.log"),
         script:
             "../scripts/compute_thresholds.py"
 
@@ -147,18 +147,18 @@ if RUN_CLAM:
         which is temporary, so requesting it after a completed run would force
         `clam collect` to run again. Ask for it explicitly on a fresh run:
 
-          snakemake results/<ref>/clam/<prefix>/<prefix>_sample_depth.csv
+          snakemake <outdir>/clam/<prefix>_sample_depth.csv
         """
         input:
             depths_zarr=DEPTHS_ZARR,
         output:
-            summary="results/{refGenome}/clam/{prefix}/{prefix}_sample_depth.csv",
-            per_contig="results/{refGenome}/clam/{prefix}/{prefix}_sample_depth_per_contig.csv",
+            summary=out("clam/{prefix}_sample_depth.csv"),
+            per_contig=out("clam/{prefix}_sample_depth_per_contig.csv"),
         threads: 4
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_sample_depth.log",
+            logp("clam/{prefix}_sample_depth.log"),
         script:
             "../scripts/compute_sample_depth.py"
 
@@ -172,18 +172,18 @@ if RUN_CLAM:
         """
         input:
             depths_zarr=DEPTHS_ZARR,
-            samples_tsv="results/{refGenome}/clam/{prefix}/samples.tsv",
-            exclude_file="results/{refGenome}/populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt",
-            thresholds="results/{refGenome}/clam/{prefix}/thresholds.tsv",
+            samples_tsv=out("clam/samples.tsv"),
+            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+            thresholds=out("clam/thresholds.tsv"),
         output:
-            done=touch("results/{refGenome}/clam/{prefix}/callable.zarr.done"),
+            done=touch(out("clam/callable.zarr.done")),
         params:
-            zarr=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}/callable.zarr",
+            zarr=out("clam/callable.zarr"),
         threads: config["clam_threads"]
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_loci.log",
+            logp("clam/{prefix}_loci.log"),
         shell:
             """
             rm -rf {params.zarr}
@@ -204,14 +204,14 @@ if RUN_CLAM:
     rule clam_prepare_vcf:
         """clam wants a tabix index; the analysis VCF carries a .csi."""
         input:
-            vcf="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz",
+            vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
         output:
-            vcf="results/{refGenome}/clam/{prefix}/variants.vcf.gz",
-            tbi="results/{refGenome}/clam/{prefix}/variants.vcf.gz.tbi",
+            vcf=out("clam/variants.vcf.gz"),
+            tbi=out("clam/variants.vcf.gz.tbi"),
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_prepare_vcf.log",
+            logp("clam/{prefix}_prepare_vcf.log"),
         shell:
             """
             exec 2> {log}
@@ -220,10 +220,7 @@ if RUN_CLAM:
             """
 
     def clam_roh_inputs(wc):
-        return expand(
-            "results/{refGenome}/populations/{prefix}_merged_roh/population_{k}.rg.roh",
-            refGenome=wc.refGenome, prefix=wc.prefix, k=active_k(wc),
-        )
+        return expand(out("populations/{prefix}_merged_roh/population_{k}.rg.roh"), k=active_k())
 
     rule clam_combine_roh:
         """All populations' merged ROH as one sorted, indexed BED.
@@ -232,17 +229,17 @@ if RUN_CLAM:
         heterozygosity-outside-ROH uses the same ROH definition as F_ROH.
         """
         input:
-            pops_done="results/{refGenome}/populations/{prefix}_populations-done.txt",
+            pops_done=out("populations/{prefix}_populations-done.txt"),
             roh_files=clam_roh_inputs,
         output:
-            bed_gz="results/{refGenome}/clam/{prefix}/combined_roh.bed.gz",
-            bed_tbi="results/{refGenome}/clam/{prefix}/combined_roh.bed.gz.tbi",
+            bed_gz=out("clam/combined_roh.bed.gz"),
+            bed_tbi=out("clam/combined_roh.bed.gz.tbi"),
         params:
             min_roh_size=config["roh_min_size"],
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_combine_roh.log",
+            logp("clam/{prefix}_combine_roh.log"),
         shell:
             """
             exec 2> {log}
@@ -260,25 +257,27 @@ if RUN_CLAM:
         project prefix. dxy/fst only exist for K >= 2, hence the guarded moves.
         """
         input:
-            zarr_done="results/{refGenome}/clam/{prefix}/callable.zarr.done",
-            vcf="results/{refGenome}/clam/{prefix}/variants.vcf.gz",
-            tbi="results/{refGenome}/clam/{prefix}/variants.vcf.gz.tbi",
-            roh_bed="results/{refGenome}/clam/{prefix}/combined_roh.bed.gz",
-            roh_tbi="results/{refGenome}/clam/{prefix}/combined_roh.bed.gz.tbi",
-            exclude_file="results/{refGenome}/populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt",
+            zarr_done=out("clam/callable.zarr.done"),
+            vcf=out("clam/variants.vcf.gz"),
+            tbi=out("clam/variants.vcf.gz.tbi"),
+            roh_bed=out("clam/combined_roh.bed.gz"),
+            roh_tbi=out("clam/combined_roh.bed.gz.tbi"),
+            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
         output:
-            pi="results/{refGenome}/clam/{prefix}/{prefix}_pi.tsv",
-            het="results/{refGenome}/clam/{prefix}/{prefix}_heterozygosity.tsv",
-            done=touch("results/{refGenome}/clam/{prefix}/{prefix}_clam_stat.done"),
+            pi=out("clam/{prefix}_pi.tsv"),
+            het=out("clam/{prefix}_heterozygosity.tsv"),
+            done=touch(out("clam/{prefix}_clam_stat.done")),
         params:
-            zarr=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}/callable.zarr",
-            outdir=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}",
+            zarr=out("clam/callable.zarr"),
+            outdir=out("clam"),
+            dxy=out("clam/{prefix}_dxy.tsv"),
+            fst=out("clam/{prefix}_fst.tsv"),
             window=config["clam_window"],
         threads: config["clam_threads"]
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_stat.log",
+            logp("clam/{prefix}_stat.log"),
         shell:
             """
             EXCLUDE_ARG=""
@@ -297,8 +296,8 @@ if RUN_CLAM:
 
             mv {params.outdir}/pi.tsv             {output.pi}
             mv {params.outdir}/heterozygosity.tsv {output.het}
-            [ -f {params.outdir}/dxy.tsv ] && mv {params.outdir}/dxy.tsv {params.outdir}/{wildcards.prefix}_dxy.tsv || true
-            [ -f {params.outdir}/fst.tsv ] && mv {params.outdir}/fst.tsv {params.outdir}/{wildcards.prefix}_fst.tsv || true
+            [ -f {params.outdir}/dxy.tsv ] && mv {params.outdir}/dxy.tsv {params.dxy} || true
+            [ -f {params.outdir}/fst.tsv ] && mv {params.outdir}/fst.tsv {params.fst} || true
             """
 
     rule clam_summary:
@@ -310,23 +309,23 @@ if RUN_CLAM:
         pi and dxy, over all scaffolds. Pairwise is header-only when K = 1.
         """
         input:
-            pi="results/{refGenome}/clam/{prefix}/{prefix}_pi.tsv",
-            het="results/{refGenome}/clam/{prefix}/{prefix}_heterozygosity.tsv",
-            n_pops="results/{refGenome}/clam/{prefix}/n_populations.txt",
-            samples_tsv="results/{refGenome}/clam/{prefix}/samples.tsv",
-            stat_done="results/{refGenome}/clam/{prefix}/{prefix}_clam_stat.done",
-            fai="results/{refGenome}/data/genome/{refGenome}.fna.fai",
+            pi=out("clam/{prefix}_pi.tsv"),
+            het=out("clam/{prefix}_heterozygosity.tsv"),
+            n_pops=out("clam/n_populations.txt"),
+            samples_tsv=out("clam/samples.tsv"),
+            stat_done=out("clam/{prefix}_clam_stat.done"),
+            fai=CONTIGS,
         output:
-            per_pop="results/{refGenome}/clam/{prefix}/{prefix}_summary_per_pop.csv",
-            pairwise="results/{refGenome}/clam/{prefix}/{prefix}_summary_pairwise.csv",
+            per_pop=out("clam/{prefix}_summary_per_pop.csv"),
+            pairwise=out("clam/{prefix}_summary_pairwise.csv"),
         params:
-            dxy=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}/{wc.prefix}_dxy.tsv",
-            fst=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}/{wc.prefix}_fst.tsv",
+            dxy=out("clam/{prefix}_dxy.tsv"),
+            fst=out("clam/{prefix}_fst.tsv"),
             min_scaffold_size=config["min_scaffold_size"],
         conda:
             "../envs/clam.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_summary.log",
+            logp("clam/{prefix}_summary.log"),
         script:
             "../scripts/summarize_clam.py"
 
@@ -338,19 +337,19 @@ if RUN_CLAM:
         when K = 1.
         """
         input:
-            stat_done="results/{refGenome}/clam/{prefix}/{prefix}_clam_stat.done",
-            per_pop="results/{refGenome}/clam/{prefix}/{prefix}_summary_per_pop.csv",
-            fai="results/{refGenome}/data/genome/{refGenome}.fna.fai",
+            stat_done=out("clam/{prefix}_clam_stat.done"),
+            per_pop=out("clam/{prefix}_summary_per_pop.csv"),
+            fai=CONTIGS,
         output:
-            done=touch("results/{refGenome}/clam/{prefix}/{prefix}_manhattan.done"),
+            done=touch(out("clam/{prefix}_manhattan.done")),
         params:
-            prefix=lambda wc: wc.prefix,
-            outdir=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}",
-            dxy=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}/{wc.prefix}_dxy.tsv",
-            fst=lambda wc: f"results/{wc.refGenome}/clam/{wc.prefix}/{wc.prefix}_fst.tsv",
+            prefix=PREFIX,
+            outdir=out("clam"),
+            dxy=out("clam/{prefix}_dxy.tsv"),
+            fst=out("clam/{prefix}_fst.tsv"),
         conda:
             "../envs/plot.yml"
         log:
-            "logs/{refGenome}/clam/{prefix}_manhattan.log",
+            logp("clam/{prefix}_manhattan.log"),
         script:
             "../scripts/plot_clam_manhattan.py"

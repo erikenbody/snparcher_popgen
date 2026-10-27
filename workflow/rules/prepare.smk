@@ -1,8 +1,7 @@
 """Clean SNPs -> the analysis sample set and the SNP subsets used downstream.
 
-This is where the workflow begins: results/{refGenome}/{prefix}_clean_snps.vcf.gz
-is an input, not something produced here. Site filtering belongs to the variant
-caller.
+This is where the workflow begins: the `vcf` named in the config is an input,
+not something produced here. Site filtering belongs to the variant caller.
 
 The one branch here is coordinates. With use_coords: true, samples without
 coordinates are dropped (drop_samples_without_coords) so that every downstream
@@ -10,7 +9,8 @@ analysis — PCA, ADMIXTURE, TESS, ROH, pi, clam — sees exactly the same sampl
 With use_coords: false the coordinate files are written empty and the analysis
 set is the full clean SNP set.
 
-Outputs:
+Outputs, under {outdir}/prepare/:
+  {prefix}.contigs.tsv           contig <TAB> length, in reference order
   {prefix}_annotated.vcf.gz      clean SNPs with CHROM_POS_REF_ALT variant IDs
   {prefix}.coords.txt            sample <TAB> longitude <TAB> latitude (no header)
   {prefix}_analysis_set.vcf.gz   the sample set every analysis uses
@@ -20,17 +20,70 @@ Outputs:
 """
 
 
-rule annotate_variant_ids:
-    """Give every SNP a stable ID so LD pruning can be applied by ID later."""
+rule contig_lengths:
+    """Contig names and lengths, in reference order.
+
+    Taken from the .fai when `fai` is set, otherwise from the VCF's ##contig
+    header lines — which GATK, Sentieon and bcftools write for every reference
+    contig, including ones left with no variants after filtering. Either way
+    the result is the first two .fai columns, which is all anything downstream
+    reads. Fails if the header has no contig lengths, or if a contig carrying
+    variants is missing from it, rather than silently shrinking a denominator.
+    """
     input:
-        vcf="results/{refGenome}/{prefix}_clean_snps.vcf.gz",
+        vcf=INPUT_VCF,
+        fai=[INPUT_FAI] if INPUT_FAI else [],
     output:
-        vcf="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz",
-        idx="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz.csi",
+        contigs=CONTIGS,
+    params:
+        from_fai=bool(INPUT_FAI),
     conda:
         "../envs/bcftools.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_annotate.log",
+        logp("prepare/{prefix}_contig_lengths.log"),
+    shell:
+        """
+        exec 2> {log}
+        if [ "{params.from_fai}" = "True" ]; then
+            cut -f1,2 {input.fai} > {output.contigs}
+        else
+            bcftools view -h {input.vcf} \
+              | awk '/^##contig=/ {{
+                    id = ""; len = ""
+                    if (match($0, /ID=[^,>]+/))      id  = substr($0, RSTART + 3, RLENGTH - 3)
+                    if (match($0, /length=[0-9]+/))  len = substr($0, RSTART + 7, RLENGTH - 7)
+                    if (id == "" || len == "") {{ print "contig header line without ID or length: " $0 > "/dev/stderr"; bad = 1; exit 1 }}
+                    print id "\\t" len
+                }}
+                END {{ exit bad }}' > {output.contigs}
+            if [ ! -s {output.contigs} ]; then
+                echo "{input.vcf} has no ##contig lines; set fai in the config" >&2
+                exit 1
+            fi
+        fi
+
+        # Every contig that carries a variant must have a length.
+        MISSING=$(bcftools query -f '%CHROM\\n' {input.vcf} | uniq | sort -u \
+                    | comm -23 - <(cut -f1 {output.contigs} | sort -u) | head -5)
+        if [ -n "$MISSING" ]; then
+            echo "contigs with variants but no length: $MISSING" >&2
+            exit 1
+        fi
+        echo "$(wc -l < {output.contigs}) contigs"
+        """
+
+
+rule annotate_variant_ids:
+    """Give every SNP a stable ID so LD pruning can be applied by ID later."""
+    input:
+        vcf=INPUT_VCF,
+    output:
+        vcf=out("prepare/{prefix}_annotated.vcf.gz"),
+        idx=out("prepare/{prefix}_annotated.vcf.gz.csi"),
+    conda:
+        "../envs/bcftools.yml"
+    log:
+        logp("prepare/{prefix}_annotate.log"),
     shell:
         """
         exec 2> {log}
@@ -42,13 +95,13 @@ rule annotate_variant_ids:
 
 rule vcf_sample_list:
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz",
+        vcf=out("prepare/{prefix}_annotated.vcf.gz"),
     output:
-        samples="results/{refGenome}/prepare/{prefix}_vcf_samples.txt",
+        samples=out("prepare/{prefix}_vcf_samples.txt"),
     conda:
         "../envs/bcftools.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_sample_list.log",
+        logp("prepare/{prefix}_sample_list.log"),
     shell:
         "bcftools query -l {input.vcf} > {output.samples} 2> {log}"
 
@@ -62,17 +115,17 @@ rule prepare_coords:
     spellings and the validation it applies.
     """
     input:
-        samples="results/{refGenome}/prepare/{prefix}_vcf_samples.txt",
+        samples=out("prepare/{prefix}_vcf_samples.txt"),
         sheet=[config["coords_sheet"]] if USE_COORDS else [],
     output:
-        coords="results/{refGenome}/prepare/{prefix}.coords.txt",
-        no_coords="results/{refGenome}/prepare/{prefix}.no_coords.txt",
+        coords=out("prepare/{prefix}.coords.txt"),
+        no_coords=out("prepare/{prefix}.no_coords.txt"),
     params:
         coords_sheet=config["coords_sheet"],
         use_coords=USE_COORDS,
         drop_samples_without_coords=config["drop_samples_without_coords"],
     log:
-        "logs/{refGenome}/prepare/{prefix}_prepare_coords.log",
+        logp("prepare/{prefix}_prepare_coords.log"),
     script:
         "../scripts/prepare_coords.py"
 
@@ -87,56 +140,58 @@ rule analysis_set:
     Sample and site exclusion upstream of this is snpArcher's job. Sex-linked
     and anomalous scaffolds are detected and excluded later, in populations.
 
-    When there is nothing to drop this is a straight copy, which keeps the rest
-    of the workflow free of coordinate-mode branching.
+    When there is nothing to drop the annotated VCF is symlinked through rather
+    than copied, which keeps the rest of the workflow free of coordinate-mode
+    branching without storing the largest file twice.
     """
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz",
-        idx="results/{refGenome}/prepare/{prefix}_annotated.vcf.gz.csi",
-        no_coords="results/{refGenome}/prepare/{prefix}.no_coords.txt",
+        vcf=out("prepare/{prefix}_annotated.vcf.gz"),
+        idx=out("prepare/{prefix}_annotated.vcf.gz.csi"),
+        no_coords=out("prepare/{prefix}.no_coords.txt"),
     output:
-        vcf="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz",
-        idx="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz.csi",
+        vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
+        idx=out("prepare/{prefix}_analysis_set.vcf.gz.csi"),
     conda:
         "../envs/bcftools.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_analysis_set.log",
+        logp("prepare/{prefix}_analysis_set.log"),
     shell:
         """
         exec > {log} 2>&1
         if [ ! -s {input.no_coords} ]; then
-            echo "no samples to drop; copying the annotated VCF through"
-            cp {input.vcf} {output.vcf}
-            cp {input.idx} {output.idx}
+            echo "no samples to drop; linking the annotated VCF through"
+            ln -sf $(basename {input.vcf}) {output.vcf}
+            ln -sf $(basename {input.idx}) {output.idx}
         else
             echo "dropping $(wc -l < {input.no_coords}) sample(s) without coordinates:"
             sed 's/^/  /' {input.no_coords}
             bcftools view -S ^{input.no_coords} -f .,PASS {input.vcf} -a -U -O u \
               | bcftools +fill-tags -Ou \
               | bcftools view -m2 -e 'AF==0 | ref="N" | ALT="."' -O z -o {output.vcf}
-            bcftools index {output.vcf}
+            bcftools index -f {output.vcf}
         fi
         """
 
 
 rule ld_prune_list:
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz",
+        vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
     output:
-        prune_in="results/{refGenome}/prepare/{prefix}_ld.prune.in",
-        prune_out="results/{refGenome}/prepare/{prefix}_ld.prune.out",
+        prune_in=out("prepare/{prefix}_ld.prune.in"),
+        prune_out=out("prepare/{prefix}_ld.prune.out"),
     params:
         out_prefix=lambda wc, output: output.prune_in[: -len(".prune.in")],
         r2=config["ld_r2"],
+    threads: 4
     resources:
         mem_mb=16000,
     conda:
         "../envs/plink.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_ld_prune_list.log",
+        logp("prepare/{prefix}_ld_prune_list.log"),
     shell:
         """
-        plink2 --vcf {input.vcf} --make-bed \
+        plink2 --vcf {input.vcf} --threads {threads} \
           --indep-pairwise 50kb {params.r2} \
           --out {params.out_prefix} \
           --allow-extra-chr --autosome-num 95 --const-fid --bad-freqs > {log} 2>&1
@@ -145,15 +200,15 @@ rule ld_prune_list:
 
 rule ld_pruned_vcf:
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz",
-        prune_in="results/{refGenome}/prepare/{prefix}_ld.prune.in",
+        vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
+        prune_in=out("prepare/{prefix}_ld.prune.in"),
     output:
-        vcf="results/{refGenome}/prepare/{prefix}_pruned_ld.vcf.gz",
-        idx="results/{refGenome}/prepare/{prefix}_pruned_ld.vcf.gz.csi",
+        vcf=out("prepare/{prefix}_pruned_ld.vcf.gz"),
+        idx=out("prepare/{prefix}_pruned_ld.vcf.gz.csi"),
     conda:
         "../envs/bcftools.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_ld_pruned_vcf.log",
+        logp("prepare/{prefix}_ld_pruned_vcf.log"),
     shell:
         """
         exec 2> {log}
@@ -165,13 +220,13 @@ rule ld_pruned_vcf:
 rule distance_matrix:
     """plink1.9 identity-by-state distances, on the full and LD-pruned sets."""
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_analysis_set.vcf.gz",
-        pruned="results/{refGenome}/prepare/{prefix}_pruned_ld.vcf.gz",
+        vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
+        pruned=out("prepare/{prefix}_pruned_ld.vcf.gz"),
     output:
-        dist="results/{refGenome}/prepare/{prefix}_dist.dist",
-        dist_id="results/{refGenome}/prepare/{prefix}_dist.dist.id",
-        dist_ld="results/{refGenome}/prepare/{prefix}_pruned_ld.dist",
-        dist_ld_id="results/{refGenome}/prepare/{prefix}_pruned_ld.dist.id",
+        dist=out("prepare/{prefix}_dist.dist"),
+        dist_id=out("prepare/{prefix}_dist.dist.id"),
+        dist_ld=out("prepare/{prefix}_pruned_ld.dist"),
+        dist_ld_id=out("prepare/{prefix}_pruned_ld.dist.id"),
     params:
         out=lambda wc, output: output.dist[: -len(".dist")],
         out_ld=lambda wc, output: output.dist_ld[: -len(".dist")],
@@ -180,7 +235,7 @@ rule distance_matrix:
     conda:
         "../envs/plink.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_distance.log",
+        logp("prepare/{prefix}_distance.log"),
     shell:
         """
         exec > {log} 2>&1
@@ -199,19 +254,19 @@ rule subsample_snps:
     SNPs survive, all of them are kept.
     """
     input:
-        vcf="results/{refGenome}/prepare/{prefix}_pruned_ld.vcf.gz",
+        vcf=out("prepare/{prefix}_pruned_ld.vcf.gz"),
     output:
-        filtered=temp("results/{refGenome}/prepare/{prefix}_pruned_ld_maffilt.vcf.gz"),
-        filtered_idx=temp("results/{refGenome}/prepare/{prefix}_pruned_ld_maffilt.vcf.gz.csi"),
-        vcf="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz",
-        idx="results/{refGenome}/prepare/{prefix}_subsampled.vcf.gz.csi",
+        filtered=temp(out("prepare/{prefix}_pruned_ld_maffilt.vcf.gz")),
+        filtered_idx=temp(out("prepare/{prefix}_pruned_ld_maffilt.vcf.gz.csi")),
+        vcf=out("prepare/{prefix}_subsampled.vcf.gz"),
+        idx=out("prepare/{prefix}_subsampled.vcf.gz.csi"),
     params:
         maf=config["subsample_maf"],
         miss=config["missingness"],
     conda:
         "../envs/bcftools.yml"
     log:
-        "logs/{refGenome}/prepare/{prefix}_subsample.log",
+        logp("prepare/{prefix}_subsample.log"),
     shell:
         """
         exec > {log} 2>&1

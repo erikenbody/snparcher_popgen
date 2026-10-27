@@ -12,13 +12,8 @@
 # Outputs generated inside the bundled test project. Everything else under
 # .test/ is committed input data.
 .test/logs/
-.test/results/*/filter/
-.test/results/*/prepare/
-.test/results/*/structure/
-.test/results/*/populations/
-.test/results/*/clam/
-.test/results/*/*_clean_indels.vcf.gz*
-.test/results/*/*_excluded_positions.tsv.gz*
+.test/resources/
+.test/results/popgen/
 
 # Editor / OS cruft
 .DS_Store

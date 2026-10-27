@@ -1,0 +1,9 @@
+# Toolchain for compiling and running GONE2 and currentNe2 (OpenMP comes with
+# the conda gcc). The binaries are run inside this same environment so they
+# find the libstdc++/libgomp they were linked against.
+channels:
+  - conda-forge
+dependencies:
+  - cxx-compiler=2.0.0
+  - make=4.4.1
+  - git

@@ -1,38 +1,61 @@
 $schema: "https://json-schema.org/draft/2020-12/schema"
 description: >
-  Configuration for the population-genomics workflow. Every key except
-  final_prefix and refgenome has a default supplied here, so a minimal
-  config.yaml only needs those two (plus coords_sheet if use_coords is true,
-  and gvcf_dir if run_clam is true).
+  Configuration for the population-genomics workflow. Every key except vcf has
+  a default supplied here, so a minimal config.yaml needs only vcf (plus
+  coords_sheet if use_coords is true, gvcf_dir if run_clam is true, and
+  refgenome, callable_sites_bed and trackhub_email if run_trackhub is true).
 
 type: object
 
 properties:
 
-  # ------------------------------------------------------------------ project
-  final_prefix:
-    type: string
-    description: >
-      Prefix of the input VCF and of every output file. The input VCF is expected
-      at results/{refgenome}/{final_prefix}_clean_snps.vcf.gz.
-  refgenome:
-    type: string
-    description: >
-      Reference genome accession/name. Used only as a directory level inside
-      results/ and to locate results/{refgenome}/data/genome/{refgenome}.fna.fai.
-
   # ------------------------------------------------------------------- inputs
+  vcf:
+    type: string
+    description: >
+      The filtered, biallelic SNP VCF this workflow starts from (e.g.
+      snpArcher's clean_snps.vcf.gz), bgzipped and indexed. Relative paths are
+      relative to the working directory.
+  fai:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Optional reference .fai. Only its first two columns (contig, length) are
+      used. null: contig lengths are read from the VCF's ##contig header lines,
+      which GATK, Sentieon and bcftools write for every reference contig.
   callable_sites_bed:
     type: ["string", "null"]
     default: null
     description: >
-      Optional path to a BED of callable sites (e.g. snpArcher's
-      {prefix}_callable_sites.bed). Its only job is to provide the denominator
-      for pi and per-sample heterozygosity. When null, that denominator is the
-      summed length of all scaffolds in the .fai, which is inflated by however
-      much of the genome was never callable, so pi and heterozygosity come out
-      biased low and are not comparable across projects. The clam module does not
-      use this: it derives callability per sample from the GVCFs.
+      Optional BED (plain or gzipped) of callable sites, e.g. snpArcher's
+      callable_sites.bed. Provides the denominator for pi and per-sample
+      heterozygosity, and the non-callable track of the track hub. When null,
+      the pi/heterozygosity denominator is the summed length of all contigs,
+      which counts never-callable sequence, so both come out biased low and are
+      not comparable across projects. clam does not use this: it derives
+      callability per sample from the GVCFs.
+
+  # ------------------------------------------------------------------ outputs
+  final_prefix:
+    type: string
+    default: popgen
+    description: >
+      Label used in output file names and figure titles — typically the project
+      name. It is not part of any input path.
+  outdir:
+    type: string
+    default: results/popgen
+    description: Every output is written under this directory.
+  logdir:
+    type: string
+    default: logs/popgen
+    description: Every log is written under this directory.
+  refgenome:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Reference assembly accession (e.g. GCA_024610735.1). Only the track hub
+      uses it, to point at UCSC's GenArk assembly.
 
   # ------------------------------------------------------------- coordinates
   use_coords:
@@ -46,9 +69,11 @@ properties:
     type: ["string", "null"]
     default: null
     description: >
-      Required when use_coords is true. Tab-delimited, with a header row and the
-      columns sample_id, longitude, latitude (extra columns are ignored).
-      Sample IDs must match the VCF sample names.
+      Required when use_coords is true. Tab- or comma-delimited (by extension:
+      .csv is comma, anything else tab), with a header row and columns for
+      sample ID, longitude and latitude (extra columns are ignored, so
+      snpArcher's sample_metadata.csv with sample_id/lat/long works). Sample IDs
+      must match the VCF sample names.
   drop_samples_without_coords:
     type: boolean
     default: true
@@ -98,7 +123,19 @@ properties:
   tess_kvals:
     type: string
     default: "1:10"
-    description: R-style range of K values for TESS, e.g. "1:10".
+    description: >
+      R-style range of K values for TESS. Must start at 1 (e.g. "1:10"): the
+      automatic K choice indexes cross-entropy by K.
+  tess_seed:
+    type: integer
+    default: 42
+    description: Random seed for TESS3, so reruns reproduce the same Q matrices.
+  tess3r_ref:
+    type: string
+    default: 1e333c2b8d6fdb59e52996d18276ee6ee1ab25a4
+    description: >
+      Commit of github.com/bcm-uga/TESS3_encho_sen installed into the TESS
+      environment (tess3r is not on conda).
 
   # ----------------------------------------------------- population assignment
   method:
@@ -147,28 +184,93 @@ properties:
       Scaffolds shorter than this (bp) are excluded from genome-wide summaries
       of pi/heterozygosity/F_ROH.
 
-  # -------------------------------------------------------------------- GONE
-  run_gone:
+  # ---------------------------------------------------------------------- Ne
+  run_ne:
     type: boolean
     default: false
     description: >
-      Estimate recent effective population size trajectories with GONE.
-      Off by default because GONE must be compiled and only runs on Linux.
-  gone_path:
-    type: ["string", "null"]
+      Estimate recent Ne trajectories (GONE2) and contemporary Ne (currentNe2)
+      per population. Both are compiled from source on first use (needs network
+      access and a Linux toolchain, supplied by conda).
+  ne_tools_dir:
+    type: string
+    default: resources/ne_tools
+    description: >
+      Where GONE2 and currentNe2 are compiled. Point it at a shared absolute
+      path to build once for many projects.
+  ne_gone2_ref:
+    type: string
+    default: d26797efde6f4fc2094d26b500aaedff760ebcf9
+    description: Commit of github.com/esrud/GONE2 to build.
+  ne_currentne2_ref:
+    type: string
+    default: 4ee170d369fbf7b4111b4d44b689fe7ae15d40c0
+    description: Commit of github.com/esrud/currentNe2 to build.
+  ne_max_snps:
+    type: integer
+    default: 2000000
+    description: >
+      Compiled-in locus limit of both tools; each population's VCF is randomly
+      thinned to at most this many SNPs. RAM grows with ne_max_snps x ne_max_ind
+      (about 4 GB at the defaults).
+  ne_max_ind:
+    type: integer
+    default: 2000
+    description: Compiled-in sample-size limit of both tools.
+  ne_min_contig_size:
+    type: integer
+    default: 1000000
+    description: Contigs shorter than this (bp) are not used for Ne.
+  ne_max_contigs:
+    type: integer
+    default: 1000
+    maximum: 1000
+    description: >
+      At most this many of the largest qualifying contigs are used (both tools
+      cap the number of chromosomes at 1000).
+  ne_recomb_rate:
+    type: number
+    default: 1.0
+    description: >
+      Constant recombination rate (cM/Mb) used by both tools to turn physical
+      positions into genetic distances.
+  ne_seed:
+    type: integer
+    default: 1
+    description: Random seed for SNP thinning and for GONE2 (-S).
+  ne_threads:
+    type: integer
+    default: 8
+    description: Threads per GONE2 / currentNe2 run.
+  ne_gone2_modes:
+    type: array
+    items:
+      type: string
+      enum: ["standard", "metapop"]
+    default: ["standard"]
+    description: >
+      GONE2 runs per population. "metapop" adds -x (structured population),
+      subsampled to ne_gone2_metapop_snps SNPs because -x is slow.
+  ne_gone2_metapop_snps:
+    type: integer
+    default: 20000
+    description: SNPs used by GONE2 -x runs (-s), as the GONE2 README recommends.
+  ne_currentne2_modes:
+    type: array
+    items:
+      type: string
+      enum: ["standard", "metapop"]
+    default: ["standard", "metapop"]
+    description: >
+      currentNe2 runs per population. "metapop" adds -x (two equal-sized
+      subpopulations), which cannot be combined with -k.
+  ne_currentne2_k:
+    type: ["number", "null"]
     default: null
     description: >
-      Path to an existing GONE "Linux" directory (the one containing
-      script_GONE.sh and PROGRAMMES/). null: the workflow clones and builds
-      GONE into resources/GONE itself.
-  gone_seeds:
-    type: integer
-    default: 10
-    description: Number of independent GONE replicates per population.
-  gone_n_chroms:
-    type: integer
-    default: 5
-    description: GONE is run on this many of the largest scaffolds.
+      currentNe2 -k for standard runs: >0 average number of full siblings per
+      individual in the population, 0 random mating, <0 the sample value. null
+      leaves -k out, so currentNe2 estimates it from the data.
 
   # -------------------------------------------------------------------- clam
   run_clam:
@@ -184,8 +286,8 @@ properties:
     description: >
       Required when run_clam is true. Directory holding one bgzipped, tabixed
       GVCF per sample, named {sample}.g.vcf.gz (+ .tbi). May contain more
-      samples than the VCF; only assigned samples are read. May contain
-      {refGenome} and {prefix} placeholders.
+      samples than the VCF; only assigned samples are read. May contain a
+      {prefix} placeholder.
   clam_window:
     type: integer
     default: 50000
@@ -207,9 +309,9 @@ properties:
     default: null
     description: >
       Where `clam collect` writes its per-sample depth store. null means
-      results/{refGenome}/clam/{prefix}/depths.zarr. This store is large
-      (~n_samples * genome_length * 4 bytes before compression); point it at
-      bulk storage for big projects. Must contain {refGenome} and {prefix}.
+      {outdir}/clam/depths.zarr. This store is large (~n_samples *
+      genome_length * 4 bytes before compression); point it at bulk storage for
+      big projects. May contain a {prefix} placeholder.
   clam_keep_depths_zarr:
     type: boolean
     default: false
@@ -221,6 +323,18 @@ properties:
     default: 16
     description: Threads for clam collect/loci/stat.
 
+  # ---------------------------------------------------------------- trackhub
+  run_trackhub:
+    type: boolean
+    default: false
+    description: >
+      Build a UCSC track hub (windowed Tajima's D, SNP density and pi, depth,
+      allele frequency, non-callable regions, the SNPs). Requires refgenome,
+      callable_sites_bed and trackhub_email.
+  trackhub_email:
+    type: ["string", "null"]
+    default: null
+    description: Contact address written into hub.txt (UCSC requires one).
+
 required:
-  - final_prefix
-  - refgenome
+  - vcf

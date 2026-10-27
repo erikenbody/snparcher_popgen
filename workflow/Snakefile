@@ -3,20 +3,26 @@
 Pipeline:
   prepare     annotate IDs, attach coordinates, drop samples, LD-prune, subsample
   structure   PCA, ADMIXTURE, TESS (optional), composite figure
-  populations assign populations, sex-linked scaffold QC, ROH/F_ROH, pi, GONE
-  clam        callable-site-aware pi / dxy / Fst / ROH-corrected heterozygosity
+  populations assign populations, sex-linked scaffold QC, ROH/F_ROH, pi
+  ne          GONE2 recent Ne + currentNe2 contemporary Ne     [run_ne]
+  clam        callable-site-aware pi / dxy / Fst / ROH-corrected het  [run_clam]
+  trackhub    UCSC track hub                                    [run_trackhub]
 
-The input is a filtered, biallelic SNP VCF — snpArcher's _clean_snps.vcf.gz or
-anything equivalent. Site filtering (depth, missingness, MAF, callable regions)
-belongs to the variant caller and is deliberately not repeated here.
+The input is a filtered, biallelic SNP VCF — snpArcher's clean_snps.vcf.gz or
+anything equivalent — named by `vcf` in the config. Site filtering (depth,
+missingness, MAF, callable regions) belongs to the variant caller and is
+deliberately not repeated here.
 
-Expected inputs, relative to the working directory (--directory):
-  results/{refgenome}/{prefix}_clean_snps.vcf.gz   required
-  results/{refgenome}/data/genome/{refgenome}.fna.fai
-  a coordinate sheet (use_coords: true) and a GVCF directory (run_clam: true)
-  a callable-sites BED (optional; the pi / heterozygosity denominator)
+Inputs (config keys):
+  vcf                  required
+  fai                  optional; contig lengths come from the VCF header otherwise
+  coords_sheet         when use_coords is true
+  callable_sites_bed   optional; the pi / heterozygosity denominator
+  gvcf_dir             when run_clam is true
 
-See README.md for the full description and config/config.yaml for every knob.
+Runs standalone (snakemake --directory <project> --configfile <config>) or as a
+snpArcher module, which passes these paths in. See README.md and
+config/config.yaml for every option.
 """
 
 import os
@@ -29,7 +35,6 @@ min_version("7.32")
 # Keep numeric wildcards numeric. Without this, population/K/seed wildcards can
 # absorb path fragments and make rules ambiguous.
 wildcard_constraints:
-    refGenome=r"[^/]+",
     k=r"\d+",
     K=r"\d+",
     seed=r"\d+",
@@ -39,9 +44,24 @@ include: "rules/common.smk"
 include: "rules/prepare.smk"
 include: "rules/structure.smk"
 include: "rules/populations.smk"
-include: "rules/clam.smk"
+
+
+if RUN_NE:
+
+    include: "rules/ne.smk"
+
+
+if RUN_CLAM:
+
+    include: "rules/clam.smk"
+
+
+if RUN_TRACKHUB:
+
+    include: "rules/trackhub.smk"
 
 
 rule all:
+    default_target: True
     input:
         workflow_targets(),

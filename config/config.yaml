@@ -1,36 +1,40 @@
 ###############################################################################
 # Project configuration.
 #
-# Only final_prefix and refgenome are strictly required — everything else has a
-# default (see workflow/schemas/config.schema.yaml). The values below are the
-# defaults, spelled out so you can see what you are getting.
+# Only vcf is strictly required — everything else has a default (see
+# workflow/schemas/config.schema.yaml). The values below are the defaults,
+# spelled out so you can see what you are getting.
 #
 # Run with:
-#   snakemake --use-conda --cores 20 --configfile config/config.yaml
+#   snakemake --directory <project> --configfile <project>/config.yaml \
+#             --software-deployment-method conda --cores 20
 ###############################################################################
 
-# --- project ----------------------------------------------------------------
-# Inputs are looked up under results/{refgenome}/ relative to the working
-# directory (use --directory to point at a project folder).
-final_prefix: my-project
-refgenome: GCA_000000000.1
-
 # --- input ------------------------------------------------------------------
-# The workflow starts from results/{refgenome}/{final_prefix}_clean_snps.vcf.gz:
-# a filtered, biallelic SNP VCF. Dropping bad samples and filtering sites are
-# snpArcher's job, upstream of here.
+# Paths are relative to the working directory (--directory).
 #
-# A callable-sites BED, if you have one (snpArcher produces one). Its only job is
-# to provide the denominator for pi and heterozygosity. With null the denominator
-# is the whole assembly length, which biases both low. clam does not need it — it
-# derives callability from the GVCFs.
+# A filtered, biallelic SNP VCF (bgzipped + indexed), e.g. snpArcher's
+# clean_snps.vcf.gz. Dropping bad samples and filtering sites are the variant
+# caller's job, upstream of here.
+vcf: results/clean_snps.vcf.gz
+# Contig lengths. null => read from the VCF's ##contig header lines.
+fai: null
+# A callable-sites BED, if you have one (snpArcher produces one). It is the
+# denominator for pi and heterozygosity; with null the denominator is the whole
+# assembly length, which biases both low. clam does not need it.
 callable_sites_bed: null
+
+# --- output -----------------------------------------------------------------
+final_prefix: popgen         # label in file names and plot titles
+outdir: results/popgen
+logdir: logs/popgen
+refgenome: null              # assembly accession; only the track hub needs it
 
 # --- coordinates ------------------------------------------------------------
 # Set use_coords to false to run the whole workflow with no coordinates at all.
 # TESS and every map panel are then skipped and populations come from ADMIXTURE.
 use_coords: true
-coords_sheet: config/coords.tsv
+coords_sheet: config/coords.tsv   # .csv => comma-delimited, else tab
 drop_samples_without_coords: true
 
 # --- SNP subsetting ---------------------------------------------------------
@@ -43,10 +47,11 @@ admixture_kmax: 10
 admixture_seeds: [42, 420, 69, 666, 80085]
 run_tess: true
 tess_kvals: "1:10"
+tess_seed: 42
 
 # --- population assignment --------------------------------------------------
 # Start with manual_k_assignment: null, look at
-#   results/{refgenome}/structure/{prefix}_structure_composite.pdf,
+#   {outdir}/structure/{prefix}_structure_composite.pdf,
 # then pin K here and rerun.
 method: admixture
 manual_k_assignment: null
@@ -59,11 +64,20 @@ roh_merge_gap: 10000
 pi_window: 10000
 min_scaffold_size: 10000000
 
-# --- GONE (recent Ne) -------------------------------------------------------
-run_gone: false
-gone_path: null              # null => cloned and built into resources/GONE
-gone_seeds: 10
-gone_n_chroms: 5
+# --- Ne: GONE2 (recent) + currentNe2 (contemporary) -------------------------
+run_ne: false
+ne_tools_dir: resources/ne_tools   # shared absolute path => build once
+ne_recomb_rate: 1.0                # cM/Mb, used by both tools
+ne_min_contig_size: 1000000
+ne_max_contigs: 1000
+ne_max_snps: 2000000               # compiled-in limit; SNPs thinned to fit
+ne_max_ind: 2000
+ne_seed: 1
+ne_threads: 8
+ne_gone2_modes: [standard]         # add metapop for -x
+ne_gone2_metapop_snps: 20000
+ne_currentne2_modes: [standard, metapop]
+ne_currentne2_k: null              # null => estimated from the data
 
 # --- clam (callable-site aware pi/dxy/Fst/heterozygosity) -------------------
 run_clam: false              # needs per-sample GVCFs; set gvcf_dir when enabling
@@ -71,6 +85,10 @@ gvcf_dir: null               # e.g. /path/to/gvcfs, holding {sample}.g.vcf.gz
 clam_window: 50000
 clam_min_gq: 0
 clam_mean_depth_sd_scale: 2
-clam_depths_zarr_dir: null   # e.g. /bulk/depths/{refGenome}/{prefix}
+clam_depths_zarr_dir: null   # e.g. /bulk/depths/{prefix}
 clam_keep_depths_zarr: false
 clam_threads: 16
+
+# --- UCSC track hub ---------------------------------------------------------
+run_trackhub: false          # needs refgenome, callable_sites_bed, trackhub_email
+trackhub_email: null

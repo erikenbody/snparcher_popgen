@@ -328,8 +328,11 @@ def main(vcf_path, bed_path, fai_path, k_value, ccgp_project_id, roh_file):
 if __name__ == "__main__":
 
     vcf_input = snakemake.input["pop_vcf"]
-    # bed is optional: absent when no callable-sites bed was configured
-    bed_input = snakemake.input.get("bed", None)
+    # bed is optional: an empty list when no callable-sites bed is configured,
+    # otherwise a one-element list
+    bed_input = snakemake.input.get("bed") or None
+    if bed_input is not None and not isinstance(bed_input, str):
+        bed_input = bed_input[0]
     fai = snakemake.input["fai"]
     k_value = snakemake.params["k_value"]
     ccgp_project_id = snakemake.params["project_id"]

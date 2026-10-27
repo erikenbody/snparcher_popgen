@@ -6,10 +6,11 @@
 # Everything else is identical to config.yaml, so comparing the two dry-runs
 # shows exactly what coordinates buy you.
 
-final_prefix: 59-Ursus
-refgenome: GCA_024610735.1
-
+vcf: results/GCA_024610735.1/59-Ursus_clean_snps.vcf.gz
+fai: results/GCA_024610735.1/data/genome/GCA_024610735.1.fna.fai
 callable_sites_bed: results/GCA_024610735.1/59-Ursus_callable_sites.bed.gz
+
+final_prefix: 59-Ursus
 
 use_coords: false
 
@@ -24,5 +25,5 @@ qvalue_threshold: 0.8
 min_samples_per_pop: 2
 min_scaffold_size: 10000000
 
-run_gone: false
+run_ne: false
 run_clam: false

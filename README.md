@@ -2,8 +2,9 @@
 
 A Snakemake workflow that takes a joint-genotyped VCF and produces population
 structure and genetic diversity results: ancestry inference, population
-assignment, runs of homozygosity, nucleotide diversity, and callable-site-aware
-diversity and divergence statistics from GVCFs.
+assignment, runs of homozygosity, nucleotide diversity, recent and contemporary
+effective population size, callable-site-aware diversity and divergence
+statistics from GVCFs, and a UCSC track hub.
 
 It is the generalised form of the downstream analyses used by the
 [California Conservation Genomics Project](https://www.ccgproject.org/), rebuilt
@@ -11,8 +12,10 @@ so that it runs on any organism with no dependency on CCGP infrastructure.
 Sample coordinates come from a file you supply, and the whole workflow can run
 without coordinates at all.
 
-The natural upstream is [snpArcher](https://github.com/harvardinformatics/snpArcher),
-whose output layout the input paths follow, but any joint-called VCF works.
+The natural upstream is [snpArcher](https://github.com/harvardinformatics/snpArcher):
+it runs standalone on snpArcher's outputs (or any joint-called VCF), and is laid
+out to be imported as a snpArcher module — every input is a path in the config,
+and every output lands under one directory.
 
 ## What it does
 
@@ -32,11 +35,13 @@ whose output layout the input paths follow, but any joint-called VCF works.
                                               │         population assignment
                                               │         ROH, F_ROH
                                               │         pi, heterozygosity
-                                              │         GONE recent Ne  [optional]
                                               ▼
-     per-sample GVCFs ───────────────────►  clam ─────► callable-site pi
+                                              ne ─────► GONE2 recent Ne        [run_ne]
+                                                        currentNe2 current Ne
+     per-sample GVCFs ───────────────────►  clam ─────► callable-site pi       [run_clam]
                                                         dxy, Fst
                                                         ROH-corrected heterozygosity
+     clean SNPs + callable sites ───────►  trackhub ─► UCSC track hub          [run_trackhub]
 ```
 
 `structure` and `populations` are separated by a deliberate manual step: run the
@@ -46,18 +51,23 @@ workflow is built to make you make it rather than to hide it.
 
 ## Inputs
 
-All paths are relative to the working directory, which you set with
-`--directory`. This lets one clone of the workflow serve many projects.
+Every input is named by path in the config. Relative paths are relative to the
+working directory, which you set with `--directory`; this lets one clone of the
+workflow serve many projects.
 
-| Path | Required | Notes |
+| Config key | Required | Notes |
 |---|---|---|
-| `results/{refgenome}/{prefix}_clean_snps.vcf.gz` | yes | filtered, biallelic SNPs |
-| `results/{refgenome}/data/genome/{refgenome}.fna.fai` | yes | reference index |
-| a coordinate sheet | when `use_coords: true` | see below |
-| a directory of GVCFs | when `run_clam: true` | `{sample}.g.vcf.gz` + `.tbi` |
-| a callable-sites BED | optional | the pi/heterozygosity denominator; see below |
+| `vcf` | yes | filtered, biallelic SNPs, bgzipped and indexed |
+| `fai` | no | contig lengths; read from the VCF's `##contig` header lines when absent |
+| `coords_sheet` | when `use_coords: true` | see below |
+| `callable_sites_bed` | no | the pi/heterozygosity denominator and the track hub's non-callable track; see below |
+| `gvcf_dir` | when `run_clam: true` | `{sample}.g.vcf.gz` + `.tbi` |
 
-`{prefix}` is `final_prefix` and `{refgenome}` is `refgenome` from the config.
+You do not need the reference genome or its index. Contig names and lengths —
+all the workflow ever reads from a `.fai` — come from the VCF header, which
+GATK, Sentieon and bcftools fill with every reference contig, including ones
+that end up with no variants. The `contig_lengths` rule fails loudly if the
+header has no lengths, or if a contig carrying variants is missing from it.
 
 ### Filtering is not this workflow's job
 
@@ -73,18 +83,19 @@ The workflow removes exactly two things of its own accord:
   analysis sees the same sample set. Allele counts and AF are recomputed
   afterwards, so sites that became invariant do not linger.
 - **sex-linked and anomalous scaffolds**, detected from relative depth and
-  heterozygosity in `populations`, and excluded from every per-population VCF and
-  from clam.
+  heterozygosity in `populations`, and excluded from every per-population VCF,
+  from the Ne analyses and from clam.
 
 Note that the second of those applies to the per-population statistics (ROH,
-F_ROH, pi, clam) but *not* to `prepare`, so PCA, ADMIXTURE and TESS are computed
-including sex-linked scaffolds. Inspect
+F_ROH, pi, Ne, clam) but *not* to `prepare`, so PCA, ADMIXTURE and TESS are
+computed including sex-linked scaffolds. Inspect
 `populations/{prefix}_sex_id/{prefix}_sex_chromosome_candidates.csv` — if a large
 scaffold is flagged, it is worth knowing that the structure results saw it.
 
 ### The coordinate sheet
 
-Tab-delimited, **with a header row**:
+A header row, then one row per sample. Comma-delimited if the file name ends in
+`.csv`, tab-delimited otherwise:
 
 ```
 sample_id	longitude	latitude
@@ -93,10 +104,10 @@ B1347	-120.421143	39.702961
 ```
 
 Sample IDs must match the VCF sample names exactly. Column names are matched
-loosely (`sample`/`sample_id`/`indv`/…, `lon`/`long`/`x`, `lat`/`y`) but values
-are checked strictly, including a specific check for transposed longitude and
-latitude — the failure mode that produces a map which looks plausible and is
-wrong.
+loosely (`sample`/`sample_id`/`indv`/…, `lon`/`long`/`x`, `lat`/`y`) — so
+snpArcher's `sample_metadata.csv` works as is — but values are checked strictly,
+including a specific check for transposed longitude and latitude, the failure
+mode that produces a map which looks plausible and is wrong.
 
 Samples missing from the sheet are dropped from the analysis by default
 (`drop_samples_without_coords`), so every analysis sees the same sample set. Set
@@ -106,24 +117,22 @@ it to `false` to make missing coordinates an error instead.
 
 Set `use_coords: false`. TESS and every map panel leave the DAG, and populations
 are defined from ADMIXTURE alone. Everything else — PCA, ADMIXTURE, population
-assignment, ROH, F_ROH, pi, GONE, clam — is unaffected.
+assignment, ROH, F_ROH, pi, Ne, clam — is unaffected.
 
 TESS is spatially explicit and genuinely cannot run without coordinates; the
 workflow refuses `method: tess` in this mode rather than failing later inside R.
 
 ### The callable-sites BED
 
-Optional, and it now does exactly one thing: it provides the denominator for pi
-and per-sample heterozygosity. Without it, the denominator is the summed length
-of every scaffold in the `.fai` — so positions that were never callable stay in
-the denominator, and pi and heterozygosity come out biased low and are not
-comparable to values computed with a callable-sites mask.
+Optional. It provides the denominator for pi and per-sample heterozygosity.
+Without it, the denominator is the summed length of every contig — so positions
+that were never callable stay in the denominator, and pi and heterozygosity come
+out biased low and are not comparable to values computed with a callable-sites
+mask. The track hub also uses it for its non-callable-regions track.
 
 The clam module does not use it, because it derives callability per sample from
 the GVCFs. So if you run clam, its statistics are properly denominated whether or
-not you supply a BED. The non-clam `pi`/`het` outputs are the ones that need it,
-and since clam is off by default, supplying a BED is worth it if you care about
-absolute values rather than relative comparisons within one project.
+not you supply a BED.
 
 ## Quick start
 
@@ -144,7 +153,7 @@ For your own project:
 
 ```bash
 cp config/config.yaml /path/to/project/config.yaml
-# edit final_prefix, refgenome, coords_sheet, gvcf_dir
+# edit vcf, final_prefix, coords_sheet, callable_sites_bed, ...
 snakemake --directory /path/to/project --configfile /path/to/project/config.yaml \
           --software-deployment-method conda --cores 20
 ```
@@ -155,8 +164,8 @@ conda` for you, but only when Snakemake can find it — passing the flag
 explicitly, as above, works from anywhere.
 
 Conda environments are created per rule on first run. Point `--conda-prefix` at
-a shared location to reuse them across projects; expect roughly 15 GB if you
-build all of them, most of it the R environment used by TESS.
+a shared location to reuse them across projects, and point `ne_tools_dir` at a
+shared location to compile GONE2 and currentNe2 once.
 
 On a cluster, `profiles/slurm/` is a starting point (needs
 `snakemake-executor-plugin-slurm`).
@@ -169,15 +178,15 @@ fills in defaults. `config/config.yaml` is a template with the defaults written
 out. A minimal config is:
 
 ```yaml
-final_prefix: my-project
-refgenome: GCA_000000000.1
+vcf: path/to/clean_snps.vcf.gz
 use_coords: false
 ```
 
-The two optional modules are off by default: set `run_clam: true` (with
-`gvcf_dir`) for callable-site statistics, and `run_gone: true` for recent Ne.
-Coordinate-based analyses are on by default, so `use_coords: false` is what you
-add when you have no coordinates.
+The optional analyses are off by default: `run_ne: true` for GONE2/currentNe2,
+`run_clam: true` (with `gvcf_dir`) for callable-site statistics, and
+`run_trackhub: true` (with `refgenome`, `callable_sites_bed`, `trackhub_email`)
+for a track hub. Coordinate-based analyses are on by default, so
+`use_coords: false` is what you add when you have no coordinates.
 
 The options worth thinking about before a real run:
 
@@ -189,20 +198,41 @@ The options worth thinking about before a real run:
   this are treated as admixed and excluded from per-population statistics. They
   are listed in `{prefix}_populations-done.txt`, not silently dropped.
 - **`min_samples_per_pop`** — populations smaller than this are skipped, with a
-  warning. `bcftools roh`, GONE and clam all misbehave on one sample.
+  warning. `bcftools roh`, the Ne tools and clam all misbehave on one sample.
 - **`admixture_kmax`** / **`admixture_seeds`** — the K range and replicates. The
   first seed is the one plotted and used for assignment, so keep it stable.
+- **`ne_recomb_rate`** — the constant cM/Mb both Ne tools use in place of a
+  genetic map. Ne estimates scale with it, so think about it per taxon.
 - **`clam_depths_zarr_dir`** — clam's depth store is roughly
   `n_samples × genome_length × 4` bytes before compression. Point it at bulk
   storage for large projects. It is deleted after use unless
   `clam_keep_depths_zarr` is set.
 
+### Effective population size
+
+`run_ne: true` adds, per population, [GONE2](https://github.com/esrud/GONE2)
+(recent Ne trajectory) and [currentNe2](https://github.com/esrud/currentNe2)
+(contemporary Ne). Both are compiled from pinned commits into `ne_tools_dir`,
+with their locus and sample-size limits (`ne_max_snps`, `ne_max_ind`) baked in;
+each population's SNPs are thinned at random to fit. Only contigs of at least
+`ne_min_contig_size` are used.
+
+Each tool runs in the modes listed in `ne_gone2_modes` / `ne_currentne2_modes`:
+`standard` (one panmictic population) and `metapop` (`-x`, a structured
+sample — useful when structure persists within an assigned population).
+
+Runs never fail the workflow. Small or odd populations often cannot support an
+estimate — GONE2 then writes only its `_STATS` file — so every run records its
+exit status, and `{prefix}_ne_status.tsv` lists how each ended. Filter on it.
+`snakemake ne_all` runs just this part once populations exist.
+
 ## Outputs
 
-Under `results/{refgenome}/`:
+Under `outdir` (default `results/popgen/`):
 
 | Path | Contents |
 |---|---|
+| `prepare/{prefix}.contigs.tsv` | contig names and lengths used throughout |
 | `prepare/{prefix}_analysis_set.vcf.gz` | the sample set every analysis uses |
 | `prepare/{prefix}_pruned_ld.vcf.gz` | LD-pruned SNPs |
 | `prepare/{prefix}_dist.dist` | pairwise distance matrix |
@@ -216,9 +246,14 @@ Under `results/{refgenome}/`:
 | `populations/{prefix}_sex_id/` | candidate sex-linked and anomalous scaffolds |
 | `populations/{prefix}_population_pi/` | pi and per-sample heterozygosity |
 | `populations/{prefix}_merged_roh/` | ROH, F_ROH and ROH figures |
-| `populations/{prefix}_GONE/plots/` | recent Ne trajectories |
-| `clam/{prefix}/{prefix}_summary_per_pop.csv` | callable-site pi, heterozygosity in/out of ROH |
-| `clam/{prefix}/{prefix}_summary_pairwise.csv` | dxy and Hudson's Fst per population pair |
+| `ne/{prefix}_gone2_Ne.tsv`, `ne/{prefix}_gone2_Ne.png` | recent Ne trajectories |
+| `ne/{prefix}_currentne2.tsv` | contemporary Ne estimates |
+| `ne/{prefix}_ne_status.tsv` | how every Ne run ended |
+| `clam/{prefix}_summary_per_pop.csv` | callable-site pi, heterozygosity in/out of ROH |
+| `clam/{prefix}_summary_pairwise.csv` | dxy and Hudson's Fst per population pair |
+| `trackhub/` | a self-contained UCSC track hub; copy it to a web server |
+
+Logs are under `logdir` (default `logs/popgen/`).
 
 Sex-linked and anomalous scaffolds are excluded from every per-population VCF
 and from clam. Inspect `{prefix}_sex_chromosome_candidates.csv` and
@@ -234,57 +269,57 @@ clusters. The coordinates are invented, not real localities. Results are
 meaningless; the purpose is to check that the workflow executes.
 
 ```bash
-# with coordinates (runs TESS, so the first run builds the large R environment)
+# with coordinates, TESS, Ne and the track hub
 snakemake --directory .test --configfile .test/config.yaml \
           --software-deployment-method conda --cores 8
 
-# without coordinates — faster, and the quickest end-to-end check
+# without coordinates, using the .fai rather than the VCF header — the quickest
+# end-to-end check
 snakemake --directory .test --configfile .test/config_nocoords.yaml \
           --software-deployment-method conda --cores 8
 ```
 
-Both paths have been run to completion on this data. Neither test config enables
-clam or GONE: per-sample GVCFs are far too large to ship in a repository, and the
-test slice has nowhere near enough linked variants for LD-based Ne inference to
-mean anything. To exercise clam, point `gvcf_dir` at real GVCFs for the samples
-in your own dataset.
+The test configs do not enable clam: per-sample GVCFs are far too large to ship
+in a repository. To exercise clam, point `gvcf_dir` at real GVCFs for the samples
+in your own dataset. The test populations are far too small for meaningful Ne;
+the Ne runs there only check that the tools build, run and are summarised.
 
 ## Software
 
 Every rule declares its own conda environment in `workflow/envs/`, so the only
 thing you install yourself is Snakemake (>= 7.32; developed against 9.13).
 
-Three R packages are not on conda and are installed from GitHub on first use by
-the `algatr_env` rule: [algatr](https://github.com/TheWangLab/algatr),
-[wingen](https://github.com/AnushaPB/wingen) and
-[tess3r](https://github.com/bcm-uga/TESS3_encho_sen). They are only needed when
-`run_tess` is on — and be warned that this step compiles dozens of R
-dependencies from source and takes a long time on a first run. It needs network
-access. If you do not need TESS, `run_tess: false` avoids it entirely.
+Three tools are not on conda and are built on first use, which needs network
+access:
 
-GONE is cloned and built by the workflow when `run_gone` is on, or point
-`gone_path` at an existing installation.
+- [tess3r](https://github.com/bcm-uga/TESS3_encho_sen), installed into the TESS
+  environment by the `tess_env` rule — a small Rcpp package, so a quick
+  compile. Only needed when `run_tess` is on.
+- [GONE2](https://github.com/esrud/GONE2) and
+  [currentNe2](https://github.com/esrud/currentNe2), compiled into
+  `ne_tools_dir`. Only needed when `run_ne` is on.
+
+Each is pinned to a commit (`tess3r_ref`, `ne_gone2_ref`, `ne_currentne2_ref`).
 
 `clam` comes from its conda package.
 
 ## Not included
 
 Deliberately left out of this general version, since they depend on
-California-specific data or CCGP infrastructure:
+California-specific data or other infrastructure:
 
 - **Environmental association** (RDA, LFMM, wingen) — needs regional climate
   rasters and a coastline shapefile
 - **Mutation load** (SIFT, phyloP) — needs per-reference annotation tables that
   cannot be derived within the workflow
-- **UCSC track hubs** — needs hosting and a hub-registered email
 - **Contig renaming** — needs an assembly report mapping accessions to
   chromosome names
 
 ## Citing the tools
 
 This workflow orchestrates other people's software. If you publish results,
-cite: bcftools/samtools, PLINK, ADMIXTURE, VCFtools, scikit-allel, TESS3 and
-algatr, GONE, and clam.
+cite: bcftools/samtools, PLINK, ADMIXTURE, VCFtools, scikit-allel, TESS3, GONE2,
+currentNe2 and clam.
 
 ## License
 
