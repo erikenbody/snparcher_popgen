@@ -148,7 +148,11 @@ rule ne_contigs:
         exec 2> {log}
         # Sex-linked/anomalous scaffolds are already absent from the
         # population VCFs; leave them out of the list too so it says what was used.
-        awk -v m={params.min_size} 'NR==FNR {{ ex[$1] = 1; next }} !($1 in ex) && $2 >= m' \
+        # FILENAME, not NR==FNR: with no scaffold excluded the first file is
+        # empty, and NR==FNR would then read the contigs as exclusions
+        # (17-Metacarcinus got no Ne contigs that way).
+        awk -v m={params.min_size} -v ex_file={input.exclude_scaffolds} \
+            'FILENAME == ex_file {{ ex[$1] = 1; next }} !($1 in ex) && $2 >= m' \
             {input.exclude_scaffolds} {input.contigs} \
           | sort -k2,2nr | head -n {params.max_n} | cut -f1 > {output.contigs}
         echo "$(wc -l < {output.contigs}) contigs >= {params.min_size} bp" >&2
