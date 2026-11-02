@@ -90,8 +90,8 @@ checkpoint assign_populations:
         coords=out("prepare/{prefix}.coords.txt"),
         composite=out("structure/{prefix}_structure_composite.pdf"),
         admixture_q=expand(
-            out("structure/admixture/Q_files/{prefix}.{K}.{seed}.Q"),
-            K=ADMIX_K, seed=[PLOT_SEED],
+            out("structure/admixture/best_seed/{prefix}.{K}.Q"),
+            K=ADMIX_K, allow_missing=True,
         ),
         tess=[out("structure/{prefix}_TESS_qmatrix.csv")] if RUN_TESS else [],
     output:
@@ -100,8 +100,7 @@ checkpoint assign_populations:
         all_qvalues=out("populations/{prefix}_all_qvalues.txt"),
         pops_done=out("populations/{prefix}_populations-done.txt"),
     params:
-        admixture_path=out("structure/admixture/Q_files/{prefix}"),
-        plot_seed=PLOT_SEED,
+        admixture_path=out("structure/admixture/best_seed/{prefix}"),
         method=ASSIGN_METHOD,
         manual_k_assignment=MANUAL_K_PARAM,
         threshold_qval=config["qvalue_threshold"],
@@ -133,7 +132,7 @@ rule population_vcf:
     output:
         vcf=out("populations/{prefix}_population_vcf/population_{k}.vcf.gz"),
         csi=out("populations/{prefix}_population_vcf/population_{k}.vcf.gz.csi"),
-        tbi=out("populations/{prefix}_population_vcf/population_{k}.vcf.gz.tbi"),
+    threads: 4
     conda:
         "../envs/bcftools.yml"
     log:
@@ -152,11 +151,11 @@ rule population_vcf:
             echo "no scaffolds to exclude"
         fi
 
-        bcftools view -S {input.pops} $EXC_ARG -Ou -a -U {input.vcf} \
-          | bcftools +fill-tags -O z -o {output.vcf}
+        bcftools view --threads {threads} -S {input.pops} $EXC_ARG -Ou -a -U {input.vcf} \
+          | bcftools +fill-tags --threads {threads} -O z -o {output.vcf}
         rm -f $EXC_BED
+        # CSI only: a .tbi cannot index contigs over 512 Mb (58-Pseudacris).
         bcftools index {output.vcf}
-        bcftools index -t {output.vcf}
         """
 
 
@@ -250,9 +249,10 @@ rule individual_pi:
     input:
         vcf=out("populations/{prefix}_population_vcf/population_{k}.vcf.gz"),
     output:
-        pi=out("populations/{prefix}_individual_pi/{k}/{sample}.windowed.pi"),
+        # vcftools cannot write compressed output; the table is gzipped after.
+        pi=out("populations/{prefix}_individual_pi/{k}/{sample}.windowed.pi.gz"),
     params:
-        out=lambda wc, output: output.pi[: -len(".windowed.pi")],
+        out=lambda wc, output: output.pi[: -len(".windowed.pi.gz")],
         window=config["pi_window"],
     conda:
         "../envs/vcftools.yml"
@@ -262,6 +262,7 @@ rule individual_pi:
         """
         vcftools --gzvcf {input.vcf} --indv {wildcards.sample} \
           --window-pi {params.window} --out {params.out} > {log} 2>&1
+        gzip -f {params.out}.windowed.pi
         """
 
 
@@ -269,7 +270,7 @@ def individual_pi_files(wc):
     """Per-individual pi files for one population, from the checkpoint output."""
     pops = population_files()
     return expand(
-        out("populations/{prefix}_individual_pi/{k}/{sample}.windowed.pi"),
+        out("populations/{prefix}_individual_pi/{k}/{sample}.windowed.pi.gz"),
         k=wc.k, sample=pops.get(wc.k, []),
     )
 

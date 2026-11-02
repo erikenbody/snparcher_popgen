@@ -20,11 +20,16 @@ def calc_roh(roh, fai, output, population, min_roh_size, min_scaffold_size):
     dffai = dffai[dffai[1] > int(min_scaffold_size)]
     chroms = dffai[0].values
 
+    # A fragmented assembly has no scaffold long enough to measure F_ROH on.
+    # Write empty outputs, as when no sample has a long ROH, so the rest of the
+    # run (pi, heterozygosity, the ROH plot) goes ahead without it.
     if dffai.empty:
-        raise SystemExit(
-            f"no scaffolds longer than min_scaffold_size ({min_scaffold_size} bp) "
-            f"in {fai}; lower min_scaffold_size for this assembly"
-        )
+        print(f"No scaffolds longer than min_scaffold_size ({min_scaffold_size} bp) "
+              f"in {fai}; F_ROH not computed.")
+        for path in (output, output.replace(".froh", "_top.froh")):
+            with open(path, "w"):
+                pass
+        return False
 
     glength = dffai[1].sum()
     

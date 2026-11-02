@@ -17,8 +17,7 @@ from scipy.stats import ttest_ind
 from statsmodels.stats.multitest import multipletests
 import seaborn as sns
 import gzip
-import gc
-import psutil
+import re
 
 # --- Snakemake I/O ---
 raw_data_path = snakemake.input.raw_data
@@ -84,152 +83,58 @@ def get_chromosome_lists(vcf_path, exclude_file, report_csv, output_csv, plot_fi
     print(f"Found {len(short_chroms)} chromosomes < 1Mb to be excluded.")
     return ref_chroms, long_chroms, short_chroms
 
-def check_memory_usage(threshold_percent=80):
-    """
-    Check current memory usage and warn if it exceeds threshold.
-    Returns True if memory usage is acceptable, False if critical.
-    """
-    memory = psutil.virtual_memory()
-    percent_used = memory.percent
-
-    if percent_used > threshold_percent:
-        print(f"WARNING: High memory usage detected: {percent_used:.1f}% of {memory.total / (1024**3):.1f} GB")
-        print(f"  Available: {memory.available / (1024**3):.1f} GB")
-        gc.collect()  # Force garbage collection
-        memory = psutil.virtual_memory()
-        print(f"  After GC: {memory.percent:.1f}% used, {memory.available / (1024**3):.1f} GB available")
-
-        if memory.percent > 90:
-            print("CRITICAL: Memory usage above 90%! Stopping to prevent crash.")
-            return False
-
-    return True
-
-def process_chromosome_data(chrom_data, chrom_name):
-    """
-    Process data for a single chromosome and return aggregated summary.
-    This is called for each chromosome separately to minimize memory usage.
-    """
-    if not chrom_data:
-        return pd.DataFrame()
-
-    # Convert list of dicts to DataFrame
-    df = pd.DataFrame(chrom_data)
-
-    # Calculate heterozygosity
-    df['is_het'] = df['Genotype'].str.contains('0[/|]1|1[/|]0', regex=True).astype(int)
-
-    # Aggregate by sample for this chromosome
-    summary = df.groupby('Sample').agg(
-        Total_Depth=('Depth', 'sum'),
-        Variant_Count=('Depth', 'size'),
-        Het_Count=('is_het', 'sum')
-    ).reset_index()
-
-    summary['Chromosome'] = chrom_name
-
-    # Explicitly delete the DataFrame and force garbage collection
-    del df
-    gc.collect()
-
-    return summary
-
 # --- MODIFICATION 1: Updated the function signature ---
 def process_raw_data(data_path, all_chrom_lengths, ref_chrom_keys):
     """
     Processes raw data to calculate depth and heterozygosity.
     Normalization medians are calculated ONLY from reference chromosomes (>5Mb).
     The analysis is performed on all chromosomes > 1Mb.
-    Uses chromosome-by-chromosome processing to minimize memory usage.
     """
-    print(f"Processing large file chromosome-by-chromosome to minimize memory usage...")
     print(f"Analyzing {len(all_chrom_lengths)} chromosomes > 1Mb")
 
-    # Get list of chromosomes to process
+    # Running totals per (chromosome, sample): memory grows with chromosomes x
+    # samples, not with variants. Holding every genotype of a chromosome first
+    # ran out of memory at 32 GB on 1-Layia (71 samples, 14 GB VCF).
     chromosomes_to_process = set(all_chrom_lengths.keys())
-
-    # Process file chromosome by chromosome
-    print("Reading file and processing by chromosome...")
-    chrom_summaries = []
-    current_chunk_data = []
-    current_chunk_chrom = None
-    warned_large_chrom = False  # Track if we've already warned about large chromosome
+    het = re.compile(r'0[/|]1|1[/|]0')
+    totals = {}  # (chrom, sample) -> [depth sum, sites with depth, het sites]
 
     with gzip.open(data_path, 'rt') as f:
         for line_num, line in enumerate(f, 1):
-            if line_num % 10_000_000 == 0:
+            if line_num % 100_000_000 == 0:
                 print(f"  Processed {line_num:,} lines...")
-
-            parts = line.strip().split('\t')
-            if len(parts) != 4:
+            parts = line.rstrip('\n').split('\t')
+            if len(parts) != 4 or parts[0] not in chromosomes_to_process:
                 continue
-
-            chrom = parts[0]
-
-            # Skip chromosomes we don't need
-            if chrom not in chromosomes_to_process:
-                # If we were collecting data and chromosome changed, process it
-                if current_chunk_data and current_chunk_chrom and current_chunk_chrom in chromosomes_to_process:
-                    chrom_summaries.append(process_chromosome_data(current_chunk_data, current_chunk_chrom))
-                    current_chunk_data = []
-                current_chunk_chrom = None
-                warned_large_chrom = False  # Reset warning flag
-                continue
-
-            # If chromosome changed and we have data, process previous chromosome
-            if current_chunk_chrom and chrom != current_chunk_chrom:
-                if current_chunk_data:
-                    print(f"  Finished chromosome {current_chunk_chrom}: {len(current_chunk_data):,} variants")
-                    chrom_summaries.append(process_chromosome_data(current_chunk_data, current_chunk_chrom))
-                    current_chunk_data = []
-
-                    # Check memory usage after processing each chromosome
-                    if not check_memory_usage(threshold_percent=80):
-                        sys.exit("ERROR: Memory usage too high. Exiting to prevent crash.")
-
-                warned_large_chrom = False  # Reset warning flag for new chromosome
-
-            current_chunk_chrom = chrom
-
-            # Safety check: if a single chromosome has too many variants, warn ONCE and check memory
-            # This prevents a single huge chromosome from consuming all memory
-            MAX_VARIANTS_PER_CHROM = 50_000_000  # 50 million variants per chromosome max
-            if len(current_chunk_data) > MAX_VARIANTS_PER_CHROM and not warned_large_chrom:
-                print(f"WARNING: Chromosome {current_chunk_chrom} has over {MAX_VARIANTS_PER_CHROM:,} variants!")
-                print(f"  This may indicate an issue. Processing anyway but monitoring memory closely...")
-                if not check_memory_usage(threshold_percent=75):
-                    print(f"ERROR: Memory critical while processing large chromosome {current_chunk_chrom}")
-                    sys.exit("Exiting to prevent crash.")
-                warned_large_chrom = True  # Set flag so we don't warn again for this chromosome
-
-            # Parse and add to current chromosome data
             try:
-                sample = parts[1]
                 depth = int(parts[2]) if parts[2] != '.' else None
-                genotype = parts[3]
-
-                if depth is not None:
-                    current_chunk_data.append({
-                        'Sample': sample,
-                        'Depth': depth,
-                        'Genotype': genotype
-                    })
-            except (ValueError, IndexError):
+            except ValueError:
                 continue
+            if depth is None:
+                continue
+            t = totals.get((parts[0], parts[1]))
+            if t is None:
+                t = totals[(parts[0], parts[1])] = [0, 0, 0]
+            t[0] += depth
+            t[1] += 1
+            if het.search(parts[3]):
+                t[2] += 1
 
-    # Process final chromosome if any data remains
-    if current_chunk_data and current_chunk_chrom and current_chunk_chrom in chromosomes_to_process:
-        print(f"  Finished chromosome {current_chunk_chrom}: {len(current_chunk_data):,} variants")
-        chrom_summaries.append(process_chromosome_data(current_chunk_data, current_chunk_chrom))
+    print(f"Combining results from {len({c for c, _ in totals})} chromosomes...")
 
-    print(f"Combining results from {len(chrom_summaries)} chromosomes...")
-
-    # Combine all chromosome summaries
-    if not chrom_summaries:
+    if not totals:
         print("Warning: No valid data found in file")
         return pd.DataFrame()
 
-    summary = pd.concat(chrom_summaries, ignore_index=True)
+    # Chromosomes in file order, samples sorted within each, as before.
+    summary = pd.DataFrame(
+        [(sample, depth_sum, n, n_het, chrom) for (chrom, sample), (depth_sum, n, n_het) in totals.items()],
+        columns=['Sample', 'Total_Depth', 'Variant_Count', 'Het_Count', 'Chromosome'],
+    )
+    order = {c: i for i, c in enumerate(dict.fromkeys(summary['Chromosome']))}
+    summary = (summary.assign(_o=summary['Chromosome'].map(order))
+               .sort_values(['_o', 'Sample'], kind='stable').drop(columns='_o')
+               .reset_index(drop=True))
 
     summary['Depth'] = summary['Total_Depth'] / summary['Variant_Count']
     summary['chr_len'] = summary['Chromosome'].map(all_chrom_lengths)

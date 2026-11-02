@@ -27,7 +27,7 @@ rule trackhub_write_hub:
             file_type=TRACKHUB_FILE_TYPES, window=TRACKHUB_WINDOWS,
         ),
         vcf=out("trackhub/{prefix}_snps.vcf.gz"),
-        tbi=out("trackhub/{prefix}_snps.vcf.gz.tbi"),
+        csi=out("trackhub/{prefix}_snps.vcf.gz.csi"),
         callable_sites=out("trackhub/non_callable_sites.bb"),
         allele_freq=out("trackhub/allele_freq.bw"),
         depth=out("trackhub/depth.bw"),
@@ -52,7 +52,8 @@ rule trackhub_strip_vcf:
         vcf=INPUT_VCF,
     output:
         vcf=out("trackhub/{prefix}_snps.vcf.gz"),
-        tbi=out("trackhub/{prefix}_snps.vcf.gz.tbi"),
+        csi=out("trackhub/{prefix}_snps.vcf.gz.csi"),
+    threads: 4
     conda:
         "../envs/trackhub.yml"
     log:
@@ -60,8 +61,10 @@ rule trackhub_strip_vcf:
     shell:
         """
         exec 2> {log}
-        bcftools annotate -x INFO,^FORMAT/GT {input.vcf} -O z -o {output.vcf}
-        tabix -p vcf {output.vcf}
+        bcftools annotate --threads {threads} -x INFO,^FORMAT/GT {input.vcf} -O z -o {output.vcf}
+        # CSI, which UCSC finds next to the VCF as it does a .tbi; a .tbi
+        # cannot index contigs over 512 Mb.
+        tabix --csi -p vcf {output.vcf}
         """
 
 

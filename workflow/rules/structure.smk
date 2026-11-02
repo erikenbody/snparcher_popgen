@@ -1,14 +1,17 @@
 """Ancestry inference: PCA, ADMIXTURE, and optionally TESS.
 
-ADMIXTURE runs for K = 1..admixture_kmax across admixture_seeds replicates; the
-first seed is the one plotted and used for population assignment. TESS is the
-spatially-explicit counterpart and only exists when coordinates are available.
+ADMIXTURE runs for K = 1..admixture_kmax across admixture_seeds replicates; at
+each K the replicate with the highest log-likelihood is the one plotted and used
+for population assignment. TESS is the spatially-explicit counterpart and only
+exists when coordinates are available.
 
 The composite PDF is the figure to look at before choosing manual_k_assignment.
 
 Outputs, under {outdir}/structure/:
   {prefix}.eigenvec / .eigenval                PCA
-  admixture/Q_files/{prefix}.{K}.{seed}.Q      ancestry proportions
+  admixture/Q_files/{prefix}.{K}.{seed}.Q      ancestry proportions, every replicate
+  admixture/best_seed/{prefix}.{K}.Q           the best-likelihood replicate at K
+  admixture/{prefix}_best_seed.tsv             log-likelihood of every replicate
   {prefix}_best_K.txt                          CV scores, best K, Evanno dK
   {prefix}_TESS_qmatrix.csv                     TESS ancestry (coords only)
   {prefix}_TESS_pieplot.pdf                     TESS pies on a map (coords only)
@@ -48,7 +51,7 @@ rule admixture_plink_input:
         vcf=out("prepare/{prefix}_subsampled.vcf.gz"),
     output:
         bed=out("structure/admixture/{prefix}.bed"),
-        bim_orig=out("structure/admixture/{prefix}.bim.orig"),
+        bim_orig=temp(out("structure/admixture/{prefix}.bim.orig")),
         fam=out("structure/admixture/{prefix}.fam"),
     params:
         out=lambda wc, output: output.bed[: -len(".bed")],
@@ -139,6 +142,33 @@ rule admixture_best_k:
         "../scripts/admixture_cloud.R"
 
 
+rule admixture_best_seed:
+    """For each K, keep the replicate that reached the highest log-likelihood."""
+    input:
+        logs=expand(
+            out("structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log"),
+            K=ADMIX_K, seed=ADMIX_SEEDS, allow_missing=True,
+        ),
+        qfiles=expand(
+            out("structure/admixture/Q_files/{prefix}.{K}.{seed}.Q"),
+            K=ADMIX_K, seed=ADMIX_SEEDS, allow_missing=True,
+        ),
+    output:
+        q=expand(out("structure/admixture/best_seed/{prefix}.{K}.Q"),
+                 K=ADMIX_K, allow_missing=True),
+        # Outside logs/, which admixture_cloud.R globs for replicates.
+        logs=expand(out("structure/admixture/best_seed/{prefix}_admix_K{K}.log"),
+                    K=ADMIX_K, allow_missing=True),
+        table=out("structure/admixture/{prefix}_best_seed.tsv"),
+    params:
+        ks=ADMIX_K,
+        seeds=ADMIX_SEEDS,
+    log:
+        logp("structure/{prefix}_admixture_best_seed.log"),
+    script:
+        "../scripts/admixture_best_seed.py"
+
+
 if RUN_TESS:
 
     rule tess_env:
@@ -203,27 +233,23 @@ if RUN_TESS:
 
 
 rule structure_composite:
-    """One figure summarising every ancestry result, for choosing K.
-
-    Panels present depend on the mode: ADMIXTURE barplot, CV/deltaK and PCA are
-    always drawn; maps need coordinates; the TESS panels and the
-    ADMIXTURE-vs-TESS agreement panels need TESS.
+    """The CCGP admixture composite: ADMIXTURE and TESS maps side by side, CV
+    and cross-entropy, ADMIXTURE-vs-TESS correlation and assignment agreement,
+    Fst, PCA. Without TESS (no coordinates) only CV, Fst and PCA are drawn.
     """
     input:
         cv_errors=out("structure/admixture/logs/{prefix}_best_K.txt"),
-        cv_plot=out("structure/admixture/logs/{prefix}_admixture_cv.png"),
-        deltak_plot=out("structure/admixture/logs/{prefix}_admixture_deltak.png"),
         eigenvec=out("structure/{prefix}.eigenvec"),
         eigenval=out("structure/{prefix}.eigenval"),
         fam=out("structure/admixture/{prefix}.fam"),
         coords=out("prepare/{prefix}.coords.txt"),
         admixture_logs=expand(
-            out("structure/admixture/logs/{prefix}_admix_K{K}_seed{seed}.log"),
-            K=ADMIX_K, seed=[PLOT_SEED],
+            out("structure/admixture/best_seed/{prefix}_admix_K{K}.log"),
+            K=ADMIX_K, allow_missing=True,
         ),
         admixture_q=expand(
-            out("structure/admixture/Q_files/{prefix}.{K}.{seed}.Q"),
-            K=ADMIX_K, seed=[PLOT_SEED],
+            out("structure/admixture/best_seed/{prefix}.{K}.Q"),
+            K=ADMIX_K, allow_missing=True,
         ),
         tess=[out("structure/{prefix}_TESS_qmatrix.csv")] if RUN_TESS else [],
         xval=[out("structure/{prefix}_TESS_xval.csv")] if RUN_TESS else [],
@@ -231,8 +257,7 @@ rule structure_composite:
         pdf=out("structure/{prefix}_structure_composite.pdf"),
         merged=out("structure/{prefix}_admixture_tess_merged.csv"),
     params:
-        admixture_path=out("structure/admixture/Q_files/{prefix}"),
-        plot_seed=PLOT_SEED,
+        admixture_path=out("structure/admixture/best_seed/{prefix}"),
         use_coords=USE_COORDS,
         run_tess=RUN_TESS,
         kmax=config["admixture_kmax"],

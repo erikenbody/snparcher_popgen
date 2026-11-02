@@ -11,11 +11,12 @@ set is the full clean SNP set.
 
 Outputs, under {outdir}/prepare/:
   {prefix}.contigs.tsv           contig <TAB> length, in reference order
-  {prefix}_annotated.vcf.gz      clean SNPs with CHROM_POS_REF_ALT variant IDs
   {prefix}.coords.txt            sample <TAB> longitude <TAB> latitude (no header)
-  {prefix}_analysis_set.vcf.gz   the sample set every analysis uses
-  {prefix}_pruned_ld.vcf.gz      LD-pruned (ld_r2), for PCA/ADMIXTURE/TESS
-  {prefix}_subsampled.vcf.gz     ~1M SNPs, stricter MAF, for ADMIXTURE/TESS
+  {prefix}_analysis_set.vcf.gz   the sample set every analysis uses; a link to
+                                 the input VCF when no samples are dropped
+  {prefix}_pruned_ld.vcf.gz      LD-pruned (ld_r2), for PCA/ADMIXTURE/TESS, with
+                                 CHROM_POS_REF_ALT variant IDs
+  {prefix}_subsampled.vcf.gz     ~1M SNPs, stricter MAF, for ADMIXTURE/TESS (temp)
   {prefix}_dist.dist(.id)        plink identity-by-state distance matrices
 """
 
@@ -73,29 +74,9 @@ rule contig_lengths:
         """
 
 
-rule annotate_variant_ids:
-    """Give every SNP a stable ID so LD pruning can be applied by ID later."""
-    input:
-        vcf=INPUT_VCF,
-    output:
-        vcf=out("prepare/{prefix}_annotated.vcf.gz"),
-        idx=out("prepare/{prefix}_annotated.vcf.gz.csi"),
-    conda:
-        "../envs/bcftools.yml"
-    log:
-        logp("prepare/{prefix}_annotate.log"),
-    shell:
-        """
-        exec 2> {log}
-        bcftools annotate --set-id '%CHROM\\_%POS\\_%REF\\_%FIRST_ALT' \
-          -O z -o {output.vcf} {input.vcf}
-        bcftools index {output.vcf}
-        """
-
-
 rule vcf_sample_list:
     input:
-        vcf=out("prepare/{prefix}_annotated.vcf.gz"),
+        vcf=INPUT_VCF,
     output:
         samples=out("prepare/{prefix}_vcf_samples.txt"),
     conda:
@@ -133,24 +114,25 @@ rule prepare_coords:
 rule analysis_set:
     """The VCF every downstream analysis uses.
 
-    The only thing dropped here is samples with no coordinates. Alleles are
-    re-trimmed and AF recomputed so that sites which became invariant after
-    dropping samples do not linger.
+    The only thing dropped is samples with no coordinates; when any are,
+    alleles are re-trimmed and AF recomputed so that sites which became
+    invariant do not linger. When none are, this is a link to the input VCF
+    plus an index: rewriting it cost hours on large projects (58-Sceloporus:
+    79 GB) and stored a second copy, only to add variant IDs that the LD-pruning
+    steps now make themselves.
 
     Sample and site exclusion upstream of this is snpArcher's job. Sex-linked
     and anomalous scaffolds are detected and excluded later, in populations.
-
-    When there is nothing to drop the annotated VCF is symlinked through rather
-    than copied, which keeps the rest of the workflow free of coordinate-mode
-    branching without storing the largest file twice.
     """
     input:
-        vcf=out("prepare/{prefix}_annotated.vcf.gz"),
-        idx=out("prepare/{prefix}_annotated.vcf.gz.csi"),
+        vcf=INPUT_VCF,
         no_coords=out("prepare/{prefix}.no_coords.txt"),
     output:
         vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
         idx=out("prepare/{prefix}_analysis_set.vcf.gz.csi"),
+    # Compression is ~80% of a rewrite; 4 threads made it ~3x faster on
+    # 58-Sceloporus, and more barely helped.
+    threads: 4
     conda:
         "../envs/bcftools.yml"
     log:
@@ -159,26 +141,26 @@ rule analysis_set:
         """
         exec > {log} 2>&1
         if [ ! -s {input.no_coords} ]; then
-            echo "no samples to drop; linking the annotated VCF through"
-            ln -sf $(basename {input.vcf}) {output.vcf}
-            ln -sf $(basename {input.idx}) {output.idx}
+            echo "no samples to drop; linking the input VCF"
+            ln -sf $(readlink -f {input.vcf}) {output.vcf}
         else
             echo "dropping $(wc -l < {input.no_coords}) sample(s) without coordinates:"
             sed 's/^/  /' {input.no_coords}
-            bcftools view -S ^{input.no_coords} -f .,PASS {input.vcf} -a -U -O u \
+            bcftools view --threads {threads} -S ^{input.no_coords} -f .,PASS -a -U -O u {input.vcf} \
               | bcftools +fill-tags -Ou \
-              | bcftools view -m2 -e 'AF==0 | ref="N" | ALT="."' -O z -o {output.vcf}
-            bcftools index -f {output.vcf}
+              | bcftools view --threads {threads} -m2 -e 'AF==0 | ref="N" | ALT="."' -O z -o {output.vcf}
         fi
+        bcftools index --threads {threads} -f {output.vcf}
         """
 
 
 rule ld_prune_list:
     input:
         vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
+        contigs=CONTIGS,
     output:
-        prune_in=out("prepare/{prefix}_ld.prune.in"),
-        prune_out=out("prepare/{prefix}_ld.prune.out"),
+        prune_in=temp(out("prepare/{prefix}_ld.prune.in")),
+        prune_out=temp(out("prepare/{prefix}_ld.prune.out")),
     params:
         out_prefix=lambda wc, output: output.prune_in[: -len(".prune.in")],
         r2=config["ld_r2"],
@@ -191,10 +173,20 @@ rule ld_prune_list:
         logp("prepare/{prefix}_ld_prune_list.log"),
     shell:
         """
+        exec > {log} 2>&1
+        # IDs as CHROM_POS_REF_ALT, matching what ld_pruned_vcf sets. plink2
+        # rewrites contig names it reads as chromosome codes (1, chr1, X, MT...);
+        # ld_pruned_vcf checks that every listed ID is found.
+        # --output-chr keeps the VCF's style for the names plink2 recodes: chr
+        # prefix or not, M or MT. Other contig names pass through unchanged.
+        OUTPUT_CHR=$(awk '$1 ~ /^chr([0-9]+|X|Y|XY|M|MT)$/ {{p = "chr"}} $1 ~ /^(chr)?M$/ {{m = "M"}}
+                          END {{print p (m ? m : "MT")}}' {input.contigs})
         plink2 --vcf {input.vcf} --threads {threads} \
+          --set-all-var-ids '@_#_$r_$a' --new-id-max-allele-len 1000 \
+          --output-chr $OUTPUT_CHR \
           --indep-pairwise 50kb {params.r2} \
           --out {params.out_prefix} \
-          --allow-extra-chr --autosome-num 95 --const-fid --bad-freqs > {log} 2>&1
+          --allow-extra-chr --autosome-num 95 --const-fid --bad-freqs
         """
 
 
@@ -205,6 +197,7 @@ rule ld_pruned_vcf:
     output:
         vcf=out("prepare/{prefix}_pruned_ld.vcf.gz"),
         idx=out("prepare/{prefix}_pruned_ld.vcf.gz.csi"),
+    threads: 4
     conda:
         "../envs/bcftools.yml"
     log:
@@ -212,8 +205,18 @@ rule ld_pruned_vcf:
     shell:
         """
         exec 2> {log}
-        bcftools view -i 'ID=@{input.prune_in}' -O z -o {output.vcf} {input.vcf}
-        bcftools index {output.vcf}
+        bcftools annotate --threads {threads} --set-id '%CHROM\\_%POS\\_%REF\\_%FIRST_ALT' -O u {input.vcf} \
+          | bcftools view --threads {threads} -i 'ID=@{input.prune_in}' -O z -o {output.vcf}
+        bcftools index --threads {threads} {output.vcf}
+        # Every SNP plink2 kept must be found. Fewer means the IDs did not match
+        # (plink2 renamed a contig), which would silently thin the data.
+        KEPT=$(bcftools index -n {output.vcf})
+        LISTED=$(wc -l < {input.prune_in})
+        echo "plink2 kept $LISTED SNPs; $KEPT found in the VCF" >&2
+        if [ "$KEPT" -lt "$LISTED" ]; then
+            echo "ERROR: $(( LISTED - KEPT )) pruned SNP IDs not found; see ld_prune_list's contig names" >&2
+            exit 1
+        fi
         """
 
 
@@ -258,8 +261,9 @@ rule subsample_snps:
     output:
         filtered=temp(out("prepare/{prefix}_pruned_ld_maffilt.vcf.gz")),
         filtered_idx=temp(out("prepare/{prefix}_pruned_ld_maffilt.vcf.gz.csi")),
-        vcf=out("prepare/{prefix}_subsampled.vcf.gz"),
-        idx=out("prepare/{prefix}_subsampled.vcf.gz.csi"),
+        # Only PCA, the ADMIXTURE plink set and TESS read this.
+        vcf=temp(out("prepare/{prefix}_subsampled.vcf.gz")),
+        idx=temp(out("prepare/{prefix}_subsampled.vcf.gz.csi")),
     params:
         maf=config["subsample_maf"],
         miss=config["missingness"],

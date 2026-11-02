@@ -19,6 +19,7 @@ Everything else is a parameter, not a branch.
 
 from pathlib import Path
 
+import yaml
 from snakemake.utils import validate
 from snakemake.exceptions import WorkflowError
 
@@ -26,7 +27,13 @@ from snakemake.exceptions import WorkflowError
 # current_basedir, not basedir: under snpArcher's `module` directive basedir is
 # snpArcher's workflow directory, not this one.
 WORKFLOW_DIR = Path(workflow.current_basedir).parent
-validate(config, str(WORKFLOW_DIR / "schemas" / "config.schema.yaml"))
+SCHEMA = WORKFLOW_DIR / "schemas" / "config.schema.yaml"
+validate(config, str(SCHEMA))
+# validate() fills in schema defaults, but not in the jobs that cluster
+# executors (e.g. slurm) start on compute nodes, so apply them explicitly.
+for _key, _spec in yaml.safe_load(SCHEMA.read_text())["properties"].items():
+    if "default" in _spec:
+        config.setdefault(_key, _spec["default"])
 
 PREFIX = config["final_prefix"]
 OUTDIR = config["outdir"].rstrip("/")
@@ -102,11 +109,10 @@ if RUN_TRACKHUB and not (USE_BED and config["trackhub_email"]):
         "trackhub_email (UCSC requires a contact address in hub.txt)."
     )
 
-# ADMIXTURE replicates. The first seed is the "plot seed": the replicate whose Q
-# matrices are shown in the composite figure and used for population assignment.
+# ADMIXTURE replicates. At each K the one with the highest log-likelihood is
+# plotted and used for population assignment (rule admixture_best_seed).
 ADMIX_K = list(range(1, int(config["admixture_kmax"]) + 1))
 ADMIX_SEEDS = list(config["admixture_seeds"])
-PLOT_SEED = ADMIX_SEEDS[0]
 
 # manual_k_assignment: null means "let the data choose". The R scripts want a
 # number or the string "NA".

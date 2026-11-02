@@ -212,26 +212,27 @@ def process_genotypes_with_augmented_intervals(vcf_path, augmented_intervals, ge
 
 #     return sum_pairwise_diff
 
-def calculate_mean_pairwise_diff(vcf_path):
-    callset = allel.read_vcf(vcf_path)
-    genotypes = allel.GenotypeArray(callset['calldata/GT'])
-    ac = genotypes.count_alleles()
+def scan_genotypes(vcf_path, chunk_length=1_000_000):
+    """Per-sample heterozygous counts and the summed mean pairwise difference.
 
-    pairwise_diff = allel.mean_pairwise_difference(ac, an=None, fill=0)
-    sum_pairwise_diff = sum(pairwise_diff)
-    return sum_pairwise_diff
+    Streams the genotypes in chunks rather than loading the whole VCF: a
+    population VCF can hold ~75M records, which took over 32 GB read whole.
+    Both totals are accumulated in record order, so they match a whole-file read.
+    """
+    _, samples, _, chunks = allel.iter_vcf_chunks(
+        vcf_path, fields=['calldata/GT'], chunk_length=chunk_length)
+    het_counts = np.zeros(len(samples), dtype=np.int64)
+    sum_pairwise_diff = 0
+    for chunk, *_ in chunks:
+        genotypes = allel.GenotypeArray(chunk['calldata/GT'])
+        het_counts += genotypes.is_het().sum(axis=0)
+        ac = genotypes.count_alleles()
+        sum_pairwise_diff = sum(allel.mean_pairwise_difference(ac, an=None, fill=0),
+                                sum_pairwise_diff)
+    return samples, het_counts, sum_pairwise_diff
 
-def calculate_sample_heterozygosity(vcf_path, total_length):
-    callset = allel.read_vcf(vcf_path)
-    genotypes = allel.GenotypeArray(callset['calldata/GT'])
-
-    # Compute heterozygosity (Ho) per individual
-    is_het = genotypes.is_het()  # A boolean array marking heterozygous calls
-    het_counts = is_het.sum(axis=0)  # Sum heterozygous calls per individual
+def calculate_sample_heterozygosity(sample_names, het_counts, total_length):
     avg_het = het_counts / total_length  # Average per callable site
-
-    # Get sample names
-    sample_names = callset['samples']
     return pd.DataFrame({'sample_name': sample_names, 'avg_heterozygosity': avg_het, "het_counts": het_counts})
 
 def _open_text(path):
@@ -241,9 +242,13 @@ def _open_text(path):
         return gzip.open(path, 'rt')
     return open(path, 'r')
 
-def load_bed_file(bed_path):
-    # calculate the total length of callable sequence based on a bed file of callable regions
+def load_bed_file(bed_path, fai_path):
+    # calculate the total length of callable sequence based on a bed file of callable regions.
+    # A BED made against another assembly (different contig names) would give a
+    # plausible but wrong denominator, so every contig must be in the fai.
+    contigs = {line.split('\t')[0] for line in open(fai_path)}
     total_length = 0
+    unknown = set()
 
     with _open_text(bed_path) as bed_file:
         for line in bed_file:
@@ -253,8 +258,15 @@ def load_bed_file(bed_path):
             if len(fields) < 3:
                 continue
             chrom, start, end = fields[:3]
+            if chrom not in contigs:
+                unknown.add(chrom)
             total_length += int(end) - int(start)
 
+    if unknown:
+        raise ValueError(
+            f"{len(unknown)} contig(s) in {bed_path} are not in the assembly "
+            f"(e.g. {sorted(unknown)[:3]}); the BED was made against another assembly"
+        )
     return total_length
 
 def load_fai_length(fai_path):
@@ -273,16 +285,15 @@ def load_fai_length(fai_path):
 def main(vcf_path, bed_path, fai_path, k_value, ccgp_project_id, roh_file):
 
     if bed_path:
-        total_length = load_bed_file(bed_path)
+        total_length = load_bed_file(bed_path, fai_path)
         print(f"denominator: {total_length} callable bp from {bed_path}")
     else:
         total_length = load_fai_length(fai_path)
         print(f"denominator: {total_length} bp (whole assembly, no callable-sites bed)")
 
-    heterozygosity_df = calculate_sample_heterozygosity(vcf_path, total_length)
+    samples, het_counts, sum_pairwise_diff = scan_genotypes(vcf_path)
+    heterozygosity_df = calculate_sample_heterozygosity(samples, het_counts, total_length)
     heterozygosity_df.to_csv(out_het, index=False)
-
-    sum_pairwise_diff = calculate_mean_pairwise_diff(vcf_path)
 
     pi = sum_pairwise_diff / total_length
 

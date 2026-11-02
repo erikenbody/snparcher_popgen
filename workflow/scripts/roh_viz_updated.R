@@ -41,7 +41,7 @@ all_pi_data <- purrr::map_dfr(pi_paths, function(file) {
     ) %>%
     mutate(
         pi_rm = zoo::rollmean(PI, 10, fill = NA, align = "center"),
-        sample_id = stringr::str_remove(basename(file), "\\.windowed\\.pi$")
+        sample_id = stringr::str_remove(basename(file), "\\.windowed\\.pi(\\.gz)?$")
     )
 })
 

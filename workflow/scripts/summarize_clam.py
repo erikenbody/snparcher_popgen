@@ -1,16 +1,26 @@
 """Aggregate clam per-window TSVs into two genome-wide CSV summaries.
 
-Per-pop summary (restricted to scaffolds >= clam_min_scaffold_size; weighted by
-Σcallable across windows on those scaffolds):
-  pi                      = Σdifferences / Σcomparisons        [pi.tsv]
-  heterozygosity          = Σhet_total   / Σcallable_total     [het.tsv]
+Everything is restricted to scaffolds >= min_scaffold_size, so that pi, dxy
+and Fst are all measured over the same sequence.
+
+Per-sample summary (sums across windows; clam loci runs --per-sample, so
+heterozygosity.tsv has one row per sample per window):
+  heterozygosity          = Σhet_total      / Σcallable_total  [het.tsv]
   heterozygosity_not_roh  = Σhet_not_in_roh / Σcallable_not_in_roh
 
-Pairwise summary (ALL scaffolds, no size filter; only when >=2 pops; header-only
-otherwise):
-  dxy         = Σdifferences / Σcomparisons        [dxy.tsv]
-  fst_hudson  = (dxy - (pi1+pi2)/2) / dxy          [ratio-of-averages]
-  fst_win_mean = mean of per-window fst            [fst.tsv]
+Per-pop summary (sums across windows):
+  pi                      = Σdifferences / Σcomparisons        [pi.tsv]
+  heterozygosity          = pooled: Σhet over all samples / Σcallable
+  heterozygosity_not_roh  = pooled, as above, outside ROH
+  heterozygosity_mean_ind = mean of the samples' heterozygosity, each sample
+  heterozygosity_not_roh_mean_ind   weighted equally
+
+Pairwise summary (only when >=2 pops; header-only otherwise):
+  dxy          = Σdifferences / Σcomparisons       [dxy.tsv]
+  fst_hudson   = (dxy - (pi1+pi2)/2) / dxy         Hudson's Fst as a ratio of
+                 averages (Bhatia et al. 2013): the genome-wide estimate
+  fst_win_mean = mean of per-window fst            [fst.tsv]; descriptive
+                 only, it weights every window equally and is biased
 """
 
 # Send stdout and stderr to the rule's log file. Snakemake does this for R
@@ -25,9 +35,15 @@ from pathlib import Path
 import pandas as pd
 
 
+PER_SAMPLE_COLS = [
+    "sample", "population",
+    "heterozygosity", "heterozygosity_not_roh",
+    "het_sites", "callable_sites", "het_sites_not_roh", "callable_sites_not_roh",
+]
 PER_POP_COLS = [
     "population", "n_samples",
     "pi", "heterozygosity", "heterozygosity_not_roh",
+    "heterozygosity_mean_ind", "heterozygosity_not_roh_mean_ind",
     "callable_sites", "callable_sites_not_roh",
 ]
 PAIRWISE_COLS = [
@@ -49,7 +65,7 @@ pop_n = (
     .groupby("population", as_index=False).size().rename(columns={"size": "n_samples"})
 )
 
-# Scaffolds >= min_scaffold_size (used only for pi/het aggregation)
+# Scaffolds >= min_scaffold_size; every statistic below is summed over these
 fai = pd.read_csv(
     snakemake.input.fai, sep="\t", header=None, usecols=[0, 1], names=["chrom", "length"]
 )
@@ -78,6 +94,27 @@ het_agg["heterozygosity_not_roh"] = (
     het_agg["het_total_not_roh"] / het_agg["callable_sites_not_roh"].replace(0, pd.NA)
 )
 
+# --- per-sample het + het_not_roh -----------------------------------------
+per_sample = het_df.groupby(["sample", "population"], as_index=False).agg(
+    het_sites=("het_total", "sum"),
+    callable_sites=("callable_total", "sum"),
+    het_sites_not_roh=("het_not_in_roh", "sum"),
+    callable_sites_not_roh=("callable_not_in_roh", "sum"),
+)
+per_sample["heterozygosity"] = (
+    per_sample["het_sites"] / per_sample["callable_sites"].replace(0, pd.NA)
+)
+per_sample["heterozygosity_not_roh"] = (
+    per_sample["het_sites_not_roh"] / per_sample["callable_sites_not_roh"].replace(0, pd.NA)
+)
+per_sample = per_sample[PER_SAMPLE_COLS].sort_values(["population", "sample"])
+per_sample.to_csv(snakemake.output.per_sample, index=False, float_format="%.6g")
+
+mean_ind = per_sample.groupby("population", as_index=False).agg(
+    heterozygosity_mean_ind=("heterozygosity", "mean"),
+    heterozygosity_not_roh_mean_ind=("heterozygosity_not_roh", "mean"),
+)
+
 per_pop = (
     pop_n
     .merge(pi_agg[["population", "pi"]], on="population", how="left")
@@ -86,6 +123,7 @@ per_pop = (
                  "callable_sites", "callable_sites_not_roh"]],
         on="population", how="left",
     )
+    .merge(mean_ind, on="population", how="left")
 )
 per_pop = per_pop[PER_POP_COLS].sort_values("population").reset_index(drop=True)
 per_pop.to_csv(snakemake.output.per_pop, index=False, float_format="%.6g")
@@ -93,6 +131,7 @@ per_pop.to_csv(snakemake.output.per_pop, index=False, float_format="%.6g")
 # --- pairwise dxy + fst ---------------------------------------------------
 if n_pops >= 2 and dxy_path.exists():
     dxy_df = pd.read_csv(dxy_path, sep="\t")
+    dxy_df = dxy_df[dxy_df["chrom"].isin(big_scaffolds)]
     pw = dxy_df.groupby(["population1", "population2"], as_index=False).agg(
         differences=("differences", "sum"),
         comparisons=("comparisons", "sum"),
@@ -113,6 +152,7 @@ if n_pops >= 2 and dxy_path.exists():
 
     if fst_path.exists():
         fst_df = pd.read_csv(fst_path, sep="\t")
+        fst_df = fst_df[fst_df["chrom"].isin(big_scaffolds)]
         fst_agg = fst_df.groupby(["population1", "population2"], as_index=False).agg(
             n_windows=("fst", "count"),
             fst_win_mean=("fst", "mean"),

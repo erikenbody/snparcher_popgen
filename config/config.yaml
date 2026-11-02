@@ -72,9 +72,12 @@ ne_min_contig_size: 1000000
 ne_max_contigs: 1000
 ne_max_snps: 2000000               # compiled-in limit; SNPs thinned to fit
 ne_max_ind: 2000
-ne_seed: 1
+ne_seed: 1                         # SNP thinning
+ne_gone2_seeds: [1046613098, 1014486260, 457144122, 125975099, 713107689, 1866053983, 1761112431, 1068686214, 2107477162, 665258747]
 ne_threads: 8
-ne_gone2_modes: [standard]         # add metapop for -x
+ne_gone2_modes: [standard, metapop]
+ne_plot_generations: [10, 150]     # x range of the publication GONE2 figure
+ne_structure_min_fst: 0.05         # -x Fst at/above this => report the metapop runs
 ne_gone2_metapop_snps: 20000
 ne_currentne2_modes: [standard, metapop]
 ne_currentne2_k: null              # null => estimated from the data

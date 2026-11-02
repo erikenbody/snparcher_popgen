@@ -21,6 +21,7 @@ large projects.
 Outputs, under {outdir}/clam/:
   {prefix}_pi.tsv, {prefix}_heterozygosity.tsv      per window
   {prefix}_dxy.tsv, {prefix}_fst.tsv                per window, K >= 2 only
+  {prefix}_summary_per_sample.csv                   genome-wide, per sample
   {prefix}_summary_per_pop.csv                      genome-wide, per population
   {prefix}_summary_pairwise.csv                     genome-wide, per population pair
   {prefix}_fst_dxy_manhattan.png                    K >= 2 only
@@ -36,17 +37,27 @@ if RUN_CLAM:
         d = directory(path)
         return d if as_bool(config["clam_keep_depths_zarr"]) else temp(d)
 
+    GVCF_SOURCE = (config["gvcf_source"] or "").replace("{prefix}", PREFIX)
+
     def clam_gvcf_inputs(wc):
         """Every GVCF (and index) clam will read, as declared inputs.
 
         Listing them individually rather than depending on the directory means a
         replaced GVCF triggers a rerun, and a missing one fails during DAG
-        construction with a useful message rather than deep inside clam.
+        construction with a useful message rather than deep inside clam. With
+        gvcf_source set they are produced by clam_fetch_gvcf instead, so they
+        are not expected to exist yet.
         """
         active_k()  # gate on the assignment checkpoint
         pops = population_files()
         samples = [s for ss in pops.values() for s in ss]
         directory_ = gvcf_dir()
+        if GVCF_SOURCE:
+            return [
+                os.path.join(directory_, f"{sample}.g.vcf.gz{ext}")
+                for sample in samples
+                for ext in ("", ".tbi")
+            ]
         files = []
         missing = []
         for sample in samples:
@@ -87,6 +98,35 @@ if RUN_CLAM:
                     rows.append(f"{sample}\t{path}\tpop{pop}")
             Path(output.samples_tsv).write_text("\n".join(rows) + "\n")
             Path(output.n_pops).write_text(f"{len(pops)}\n")
+
+    if GVCF_SOURCE:
+
+        rule clam_fetch_gvcf:
+            """Download one sample's GVCF and index from gvcf_source.
+
+            temp(): GVCFs are the largest inputs by far, and clam collect is
+            their only reader, so each pair is deleted as soon as the depth
+            store is built. Concurrency is capped by the gvcf_fetch resource;
+            set it with --resources gvcf_fetch=N.
+            """
+            output:
+                gvcf=temp(os.path.join(gvcf_dir(), "{sample}.g.vcf.gz")),
+                tbi=temp(os.path.join(gvcf_dir(), "{sample}.g.vcf.gz.tbi")),
+            wildcard_constraints:
+                sample=r"[^/]+",
+            params:
+                source=GVCF_SOURCE.rstrip("/"),
+            resources:
+                gvcf_fetch=1,
+            log:
+                logp("clam/fetch/{sample}.log"),
+            shell:
+                """
+                rsync -a --partial --timeout=600 \
+                  {params.source}/{wildcards.sample}.g.vcf.gz \
+                  {params.source}/{wildcards.sample}.g.vcf.gz.tbi \
+                  $(dirname {output.gvcf})/ > {log} 2>&1
+                """
 
     rule clam_collect:
         """Per-sample per-base depth from the GVCFs into a zarr store."""
@@ -303,10 +343,11 @@ if RUN_CLAM:
     rule clam_summary:
         """Genome-wide summaries from the per-window tables.
 
-        Per population: pi, heterozygosity and heterozygosity-outside-ROH,
-        restricted to scaffolds >= min_scaffold_size so that short scaffolds do
-        not dominate. Pairwise: weighted dxy and Hudson's Fst from genome-wide
-        pi and dxy, over all scaffolds. Pairwise is header-only when K = 1.
+        Per sample: heterozygosity and heterozygosity-outside-ROH. Per
+        population: pi, pooled heterozygosity, and the mean of the samples'
+        heterozygosity. Pairwise: dxy and Hudson's Fst as a ratio of averages.
+        Everything is restricted to scaffolds >= min_scaffold_size, so pi, dxy
+        and Fst share one set of sequence. Pairwise is header-only when K = 1.
         """
         input:
             pi=out("clam/{prefix}_pi.tsv"),
@@ -316,6 +357,7 @@ if RUN_CLAM:
             stat_done=out("clam/{prefix}_clam_stat.done"),
             fai=CONTIGS,
         output:
+            per_sample=out("clam/{prefix}_summary_per_sample.csv"),
             per_pop=out("clam/{prefix}_summary_per_pop.csv"),
             pairwise=out("clam/{prefix}_summary_pairwise.csv"),
         params:

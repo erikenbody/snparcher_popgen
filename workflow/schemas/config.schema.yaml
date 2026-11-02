@@ -110,10 +110,11 @@ properties:
     type: array
     items:
       type: integer
-    default: [42, 420, 69, 666, 80085]
+    # Drawn once with python's secrets module; any distinct values will do.
+    default: [1456590048, 641843846, 337528982, 2123240609, 65650425]
     description: >
-      One ADMIXTURE replicate per seed. The first seed is the one whose Q
-      matrices are plotted, so keep it stable across reruns.
+      One ADMIXTURE replicate per seed. At each K the replicate with the
+      highest log-likelihood is plotted and used for population assignment.
   run_tess:
     type: boolean
     default: true
@@ -237,17 +238,56 @@ properties:
   ne_seed:
     type: integer
     default: 1
-    description: Random seed for SNP thinning and for GONE2 (-S).
+    description: Random seed for SNP thinning.
+  ne_gone2_seeds:
+    type: array
+    items:
+      type: integer
+    minItems: 1
+    default: [1046613098, 1014486260, 457144122, 125975099, 713107689, 1866053983, 1761112431, 1068686214, 2107477162, 665258747]
+    description: >
+      GONE2 is run once per seed (-S) and summarised across seeds, as the
+      original CCGP GONE runs did with 10.
+  ne_plot_generations:
+    type: array
+    items:
+      type: integer
+    minItems: 2
+    maxItems: 2
+    default: [10, 150]
+    description: >
+      First and last generation shown in the publication GONE2 figure
+      (gone2_Ne_final). The tables and the all-runs plot keep every generation.
+  ne_structure_min_fst:
+    type: number
+    default: 0.05
+    description: >
+      A population's Ne is reported from the metapopulation (-x) runs when
+      their fitted Fst is at least this, and from the standard runs otherwise.
   ne_threads:
     type: integer
     default: 8
-    description: Threads per GONE2 / currentNe2 run.
+    description: Threads per GONE2 run.
+  ne_currentne2_threads:
+    type: integer
+    default: 32
+    description: >
+      Threads per currentNe2 run. Its d² pass over all SNP pairs is the slowest
+      step and keeps every thread busy.
+  ne_currentne2_snps:
+    type: integer
+    default: 100000
+    description: >
+      SNPs per currentNe2 run (both modes), thinned at random with ne_seed. Its
+      runtime grows with the square of the SNP count: 1.1M SNPs x 48 samples
+      projected to ~68 h on 8 threads. 100000 is the subsample in the
+      currentNe2 README's example.
   ne_gone2_modes:
     type: array
     items:
       type: string
       enum: ["standard", "metapop"]
-    default: ["standard"]
+    default: ["standard", "metapop"]
     description: >
       GONE2 runs per population. "metapop" adds -x (structured population),
       subsampled to ne_gone2_metapop_snps SNPs because -x is slow.
@@ -288,6 +328,16 @@ properties:
       GVCF per sample, named {sample}.g.vcf.gz (+ .tbi). May contain more
       samples than the VCF; only assigned samples are read. May contain a
       {prefix} placeholder.
+  gvcf_source:
+    type: ["string", "null"]
+    default: null
+    description: >
+      Optional remote location of the GVCFs, as anything rsync accepts (e.g.
+      host::module/path or user@host:/path). When set, each assigned sample's
+      {sample}.g.vcf.gz and .tbi are downloaded into gvcf_dir as temporary
+      files and deleted once clam collect has read them. Cap concurrent
+      downloads with --resources gvcf_fetch=N. May contain a {prefix}
+      placeholder.
   clam_window:
     type: integer
     default: 50000

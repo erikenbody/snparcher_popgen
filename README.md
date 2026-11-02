@@ -220,6 +220,16 @@ each population's SNPs are thinned at random to fit. Only contigs of at least
 Each tool runs in the modes listed in `ne_gone2_modes` / `ne_currentne2_modes`:
 `standard` (one panmictic population) and `metapop` (`-x`, a structured
 sample — useful when structure persists within an assigned population).
+GONE2 runs once per seed in `ne_gone2_seeds` (10 by default) and is reported
+as the mean, SD and range across seeds.
+
+Which model to report is decided per population. The `-x` runs split the
+sample's homozygote excess into differentiation among subpopulations (Fst)
+and within them (Fis). When that Fst is at least `ne_structure_min_fst`
+(0.05) the population is called structured and the `-x` estimates (N_T, the
+sum over subpopulations) are reported; otherwise `-x` found nothing to
+correct and the standard estimates are. `{prefix}_ne_model.tsv` records the
+call, the fitted Fst/Fis/migration and the reason.
 
 Runs never fail the workflow. Small or odd populations often cannot support an
 estimate — GONE2 then writes only its `_STATS` file — so every run records its
@@ -233,7 +243,7 @@ Under `outdir` (default `results/popgen/`):
 | Path | Contents |
 |---|---|
 | `prepare/{prefix}.contigs.tsv` | contig names and lengths used throughout |
-| `prepare/{prefix}_analysis_set.vcf.gz` | the sample set every analysis uses |
+| `prepare/{prefix}_analysis_set.vcf.gz` | the sample set every analysis uses (a link to the input VCF when no samples are dropped) |
 | `prepare/{prefix}_pruned_ld.vcf.gz` | LD-pruned SNPs |
 | `prepare/{prefix}_dist.dist` | pairwise distance matrix |
 | `structure/{prefix}.eigenvec` | PCA |
@@ -246,8 +256,11 @@ Under `outdir` (default `results/popgen/`):
 | `populations/{prefix}_sex_id/` | candidate sex-linked and anomalous scaffolds |
 | `populations/{prefix}_population_pi/` | pi and per-sample heterozygosity |
 | `populations/{prefix}_merged_roh/` | ROH, F_ROH and ROH figures |
-| `ne/{prefix}_gone2_Ne.tsv`, `ne/{prefix}_gone2_Ne.png` | recent Ne trajectories |
-| `ne/{prefix}_currentne2.tsv` | contemporary Ne estimates |
+| `ne/{prefix}_gone2_Ne_final.pdf` | **Ne trajectories under each population's chosen model** |
+| `ne/{prefix}_ne_estimates.pdf` | contemporary Ne from every method, with CIs |
+| `ne/{prefix}_ne_model.tsv` | standard or `-x` per population, and why |
+| `ne/{prefix}_gone2_Ne.tsv`, `_summary.tsv`, `_change.tsv`, `.png` | every GONE2 run, summaries across seeds, all runs plotted |
+| `ne/{prefix}_currentne2.tsv`, `ne/{prefix}_ne_estimates.tsv` | currentNe2 output; contemporary Ne per method |
 | `ne/{prefix}_ne_status.tsv` | how every Ne run ended |
 | `clam/{prefix}_summary_per_pop.csv` | callable-site pi, heterozygosity in/out of ROH |
 | `clam/{prefix}_summary_pairwise.csv` | dxy and Hudson's Fst per population pair |
