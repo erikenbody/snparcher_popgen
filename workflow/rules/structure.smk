@@ -102,6 +102,7 @@ rule admixture:
         # concurrent K/seed jobs would collide on those names.
         """
         BED=$(readlink -f {input.bed})
+        FAM=$(readlink -f {input.fam})
         LOG=$(realpath -m {log})
         QOUT=$(realpath -m {output.Q})
         POUT=$(realpath -m {output.P})
@@ -132,7 +133,7 @@ rule admixture:
         BASE=$(basename $BED .bed)
         if $NAN; then
             printf '\\n# Stopped: the log-likelihood became NaN; this seed is recorded as failed.\\nLoglikelihood: nan\\n' >> $LOG
-            awk -v k={wildcards.K} '{{ s = "nan"; for (i = 2; i <= k; i++) s = s " nan"; print s }}' {input.fam} > $QOUT
+            awk -v k={wildcards.K} '{{ s = "nan"; for (i = 2; i <= k; i++) s = s " nan"; print s }}' $FAM > $QOUT
             : > $POUT
         else
             [ $STATUS -eq 0 ] || exit $STATUS
