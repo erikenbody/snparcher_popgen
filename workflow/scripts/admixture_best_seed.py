@@ -41,7 +41,9 @@ def main(logs, qfiles, ks, seeds, out_q, out_log, table):
     rows = []
     for k, q_dest, log_dest in zip(ks, out_q, out_log):
         lik = {s: final_loglik(log_of[k, s]) for s in seeds}
-        # A seed whose fit went to NaN (see rule admixture) is skipped.
+        # A seed recorded as NaN is skipped. The admixture rule now retries
+        # such a seed with the next one instead; 102-Parnassius K=8 seed
+        # 641843846 was recorded as NaN before it did.
         ok = [s for s in seeds if not math.isnan(lik[s])]
         if not ok:
             raise ValueError(f"K={k}: every seed's log-likelihood is NaN")

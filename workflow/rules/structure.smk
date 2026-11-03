@@ -102,7 +102,6 @@ rule admixture:
         # concurrent K/seed jobs would collide on those names.
         """
         BED=$(readlink -f {input.bed})
-        FAM=$(readlink -f {input.fam})
         LOG=$(realpath -m {log})
         QOUT=$(realpath -m {output.Q})
         POUT=$(realpath -m {output.P})
@@ -113,33 +112,40 @@ rule admixture:
         cd $TMP
         # Some seeds send the main fit's log-likelihood to NaN; a NaN delta
         # never meets the convergence criterion, so ADMIXTURE then iterates
-        # until killed (102-Parnassius K=8: NaN at iteration 30, three 12 h
-        # timeouts). Watch the log up to "Summary:" (NaN in a later CV fold
-        # is harmless: the fit is done and admixture_cloud.R drops NaN CV
-        # errors), and on NaN stop it and record the seed as failed: an NA Q
-        # matrix and a "Loglikelihood: nan" line, which admixture_best_seed
-        # skips. Every K keeps the same seed set.
-        admixture --cv=5 -j{threads} --seed={wildcards.seed} $BED {wildcards.K} > $LOG 2>&1 &
-        PID=$!
-        NAN=false
-        while kill -0 $PID 2>/dev/null; do
-            if sed '/^Summary/q' $LOG | grep -qE '^[0-9]+ \\((EM|QN/Block)\\).*Loglikelihood: -?nan'; then
-                kill $PID; NAN=true; break
-            fi
-            sleep 30
-        done
-        STATUS=0; wait $PID || STATUS=$?
-
+        # until killed (102-Parnassius K=8 seed 641843846: NaN at iteration
+        # 30, three 12 h timeouts; seed 641843847 converged in 22 min). Watch
+        # each run's log up to "Summary:" (NaN in a later CV fold is harmless:
+        # the fit is done and admixture_cloud.R drops NaN CV errors); on NaN,
+        # stop it and start over from seed+1, up to 3 more seeds. The outputs
+        # keep the requested seed's name and the log says which seed was used.
         BASE=$(basename $BED .bed)
-        if $NAN; then
-            printf '\\n# Stopped: the log-likelihood became NaN; this seed is recorded as failed.\\nLoglikelihood: nan\\n' >> $LOG
-            awk -v k={wildcards.K} '{{ s = "nan"; for (i = 2; i <= k; i++) s = s " nan"; print s }}' $FAM > $QOUT
-            : > $POUT
-        else
-            [ $STATUS -eq 0 ] || exit $STATUS
-            mv $BASE.{wildcards.K}.P $POUT
-            mv $BASE.{wildcards.K}.Q $QOUT
-        fi
+        NOTES=""
+        for TRY in 0 1 2 3; do
+            SEED=$(( {wildcards.seed} + TRY ))
+            admixture --cv=5 -j{threads} --seed=$SEED $BED {wildcards.K} > run.log 2>&1 &
+            PID=$!
+            NAN=false
+            while kill -0 $PID 2>/dev/null; do
+                # One awk, not sed | grep -q: under pipefail a SIGPIPE'd sed would hide a match.
+                if awk '/^Summary/ {{ exit 1 }} /^[0-9]+ \\((EM|QN\\/Block)\\).*Loglikelihood: -?nan/ {{ f = 1; exit }} END {{ exit !f }}' run.log; then
+                    kill $PID; NAN=true; break
+                fi
+                sleep 30
+            done
+            STATUS=0; wait $PID || STATUS=$?
+            if ! $NAN; then
+                [ $STATUS -eq 0 ] || {{ cat run.log > $LOG; exit $STATUS; }}
+                {{ printf "$NOTES"; [ $TRY -eq 0 ] || echo "# Seed used: $SEED (requested {wildcards.seed})"; cat run.log; }} > $LOG
+                mv $BASE.{wildcards.K}.P $POUT
+                mv $BASE.{wildcards.K}.Q $QOUT
+                exit 0
+            fi
+            NOTES="$NOTES# Seed $SEED: log-likelihood became NaN at iteration $(awk '/^[0-9]+ \\(.*Loglikelihood: -?nan/ {{ print $1; exit }}' run.log); stopped.\\n"
+            rm -f $BASE.{wildcards.K}.P $BASE.{wildcards.K}.Q
+        done
+        {{ printf "$NOTES"; echo "# Every seed tried went to NaN; giving up."; }} > $LOG
+        echo "ADMIXTURE K={wildcards.K}: seeds {wildcards.seed}..$SEED all went to NaN; see $LOG" >&2
+        exit 1
         """
 
 
