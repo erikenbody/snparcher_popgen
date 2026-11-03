@@ -372,6 +372,13 @@ properties:
     type: integer
     default: 16
     description: Threads for clam collect/loci/stat.
+  clam_bin_dir:
+    type: [string, "null"]
+    default: null
+    description: >-
+      Directory holding a clam binary to use instead of the conda env's, put
+      first on PATH in the clam jobs. For references with a contig over 512 Mb
+      (CSI indexes) until a clam release reads them (cademirch/clam#64).
   clam_extra_roh_min_sizes:
     type: array
     items:

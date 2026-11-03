@@ -39,6 +39,43 @@ if RUN_CLAM:
 
     GVCF_SOURCE = (config["gvcf_source"] or "").replace("{prefix}", PREFIX)
 
+    def _longest_contig(vcf):
+        """Longest ##contig length in a bgzipped VCF's header (0 if none)."""
+        import gzip
+        import re
+        longest = 0
+        with gzip.open(vcf, "rt") as fh:
+            for line in fh:
+                if not line.startswith("##"):
+                    break
+                if line.startswith("##contig="):
+                    m = re.search(r"length=(\d+)", line)
+                    if m:
+                        longest = max(longest, int(m.group(1)))
+        return longest
+
+    # A .tbi cannot address positions past 2^29 - 1, so references with a
+    # longer contig (58-Anaxyrus, 58-Pseudacris) use .csi for the GVCFs, the
+    # variants and the ROH BEDs: CLAM_IDX is the extension, TABIX_CSI the flag.
+    # Reading .csi needs a clam with CSI support (cademirch/clam#64); point
+    # clam_bin_dir at one until it is released.
+    CLAM_IDX = "csi" if _longest_contig(INPUT_VCF) > 2**29 - 1 else "tbi"
+    TABIX_CSI = "-C" if CLAM_IDX == "csi" else ""
+    CLAM_PATH = f"export PATH={config['clam_bin_dir']}:$PATH;" if config.get("clam_bin_dir") else ""
+
+    def clam_all_samples():
+        """Every analysed sample, assigned to a population or not (NA).
+
+        clam collect and loci cover all of them, so the per-sample callable
+        masks do not depend on K: after a change of K only clam stat, which
+        takes the populations from clam/samples.tsv, needs rerunning. The
+        .fam is the analysis set's sample list and exists once the assignment
+        checkpoint has run.
+        """
+        active_k()  # gate on the assignment checkpoint
+        fam = Path(out("structure/admixture/{prefix}.fam"))
+        return [line.split()[1] for line in fam.read_text().splitlines() if line.strip()]
+
     def clam_gvcf_inputs(wc):
         """Every GVCF (and index) clam will read, as declared inputs.
 
@@ -48,15 +85,13 @@ if RUN_CLAM:
         gvcf_source set they are produced by clam_fetch_gvcf instead, so they
         are not expected to exist yet.
         """
-        active_k()  # gate on the assignment checkpoint
-        pops = population_files()
-        samples = [s for ss in pops.values() for s in ss]
+        samples = clam_all_samples()
         directory_ = gvcf_dir()
         if GVCF_SOURCE:
             return [
                 os.path.join(directory_, f"{sample}.g.vcf.gz{ext}")
                 for sample in samples
-                for ext in ("", ".tbi")
+                for ext in ("", f".{CLAM_IDX}")
             ]
         files = []
         missing = []
@@ -65,7 +100,7 @@ if RUN_CLAM:
             files.append(gvcf)
             if not os.path.exists(gvcf):
                 missing.append(gvcf)
-            tbi = f"{gvcf}.tbi"
+            tbi = f"{gvcf}.{CLAM_IDX}"
             if os.path.exists(tbi):
                 files.append(tbi)
             else:
@@ -111,11 +146,12 @@ if RUN_CLAM:
             """
             output:
                 gvcf=temp(os.path.join(gvcf_dir(), "{sample}.g.vcf.gz")),
-                tbi=temp(os.path.join(gvcf_dir(), "{sample}.g.vcf.gz.tbi")),
+                tbi=temp(os.path.join(gvcf_dir(), "{sample}.g.vcf.gz." + CLAM_IDX)),
             wildcard_constraints:
                 sample=r"[^/]+",
             params:
                 source=GVCF_SOURCE.rstrip("/"),
+                idx=CLAM_IDX,
             resources:
                 gvcf_fetch=1,
             log:
@@ -124,7 +160,7 @@ if RUN_CLAM:
                 """
                 rsync -a --partial --timeout=600 \
                   {params.source}/{wildcards.sample}.g.vcf.gz \
-                  {params.source}/{wildcards.sample}.g.vcf.gz.tbi \
+                  {params.source}/{wildcards.sample}.g.vcf.gz.{params.idx} \
                   $(dirname {output.gvcf})/ > {log} 2>&1
                 """
 
@@ -132,12 +168,17 @@ if RUN_CLAM:
         """Per-sample per-base depth from the GVCFs into a zarr store."""
         input:
             gvcfs=clam_gvcf_inputs,
-            samples_tsv=out("clam/samples.tsv"),
             exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
         output:
             depths_zarr=_depths_zarr_output(DEPTHS_ZARR),
         params:
             min_gq=config["clam_min_gq"],
+            # All analysed samples, NA included (see clam_all_samples). Written
+            # to a table in the job rather than taken as an input file: a new
+            # input file would make every finished project collect again.
+            samples=lambda wc: " ".join(clam_all_samples()),
+            gvcf_dir=gvcf_dir(),
+            clam_path=CLAM_PATH,
         threads: config["clam_threads"]
         conda:
             "../envs/clam.yml"
@@ -150,10 +191,17 @@ if RUN_CLAM:
             if [ -s {input.exclude_file} ]; then
               EXCLUDE_ARG="--exclude-file {input.exclude_file}"
             fi
+            SAMPLES=$(mktemp)
+            trap 'rm -f $SAMPLES' EXIT
+            printf 'sample_name\tfile_path\n' > $SAMPLES
+            for s in {params.samples}; do
+              printf '%s\t%s/%s.g.vcf.gz\n' $s {params.gvcf_dir} $s >> $SAMPLES
+            done
+            {params.clam_path}
             clam collect \
               -o {output.depths_zarr} \
               --min-gq {params.min_gq} \
-              --samples {input.samples_tsv} \
+              --samples $SAMPLES \
               -t {threads} \
               $EXCLUDE_ARG > {log} 2>&1
             """
@@ -212,13 +260,13 @@ if RUN_CLAM:
         """
         input:
             depths_zarr=DEPTHS_ZARR,
-            samples_tsv=out("clam/samples.tsv"),
             exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
             thresholds=out("clam/thresholds.tsv"),
         output:
             done=touch(out("clam/callable.zarr.done")),
         params:
             zarr=out("clam/callable.zarr"),
+            clam_path=CLAM_PATH,
         threads: config["clam_threads"]
         conda:
             "../envs/clam.yml"
@@ -231,11 +279,11 @@ if RUN_CLAM:
             if [ -s {input.exclude_file} ]; then
               EXCLUDE_ARG="--exclude-file {input.exclude_file}"
             fi
+            {params.clam_path}
             clam loci \
               -o {params.zarr} \
               --per-sample \
               --thresholds-file {input.thresholds} \
-              --samples {input.samples_tsv} \
               -t {threads} \
               $EXCLUDE_ARG \
               {input.depths_zarr} > {log} 2>&1
@@ -247,7 +295,9 @@ if RUN_CLAM:
             vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
         output:
             vcf=out("clam/variants.vcf.gz"),
-            tbi=out("clam/variants.vcf.gz.tbi"),
+            tbi=out("clam/variants.vcf.gz." + CLAM_IDX),
+        params:
+            csi=TABIX_CSI,
         conda:
             "../envs/clam.yml"
         log:
@@ -256,7 +306,7 @@ if RUN_CLAM:
             """
             exec 2> {log}
             ln -sf $(readlink -f {input.vcf}) {output.vcf}
-            tabix -f -p vcf {output.vcf}
+            tabix -f {params.csi} -p vcf {output.vcf}
             """
 
     def clam_roh_inputs(wc):
@@ -273,9 +323,10 @@ if RUN_CLAM:
             roh_files=clam_roh_inputs,
         output:
             bed_gz=out("clam/combined_roh.bed.gz"),
-            bed_tbi=out("clam/combined_roh.bed.gz.tbi"),
+            bed_tbi=out("clam/combined_roh.bed.gz." + CLAM_IDX),
         params:
             min_roh_size=config["roh_min_size"],
+            csi=TABIX_CSI,
         conda:
             "../envs/clam.yml"
         log:
@@ -287,7 +338,7 @@ if RUN_CLAM:
               | awk -v m={params.min_roh_size} 'BEGIN{{OFS="\\t"}} NF>=4 && ($3-$2)>=m {{print $1,$2,$3,$4}}' \
               | sort -k1,1 -k2,2n \
               | bgzip -c > {output.bed_gz}
-            tabix -p bed {output.bed_gz}
+            tabix {params.csi} -p bed {output.bed_gz}
             """
 
     rule clam_stat:
@@ -299,10 +350,15 @@ if RUN_CLAM:
         input:
             zarr_done=out("clam/callable.zarr.done"),
             vcf=out("clam/variants.vcf.gz"),
-            tbi=out("clam/variants.vcf.gz.tbi"),
+            tbi=out("clam/variants.vcf.gz." + CLAM_IDX),
             roh_bed=out("clam/combined_roh.bed.gz"),
-            roh_tbi=out("clam/combined_roh.bed.gz.tbi"),
+            roh_tbi=out("clam/combined_roh.bed.gz." + CLAM_IDX),
             exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+            # Populations come from here, not from callable.zarr's metadata,
+            # which keeps the ones it was built with: after a change of K only
+            # clam stat then needs rerunning (the per-sample masks do not
+            # depend on populations).
+            samples_tsv=out("clam/samples.tsv"),
         output:
             pi=out("clam/{prefix}_pi.tsv"),
             het=out("clam/{prefix}_heterozygosity.tsv"),
@@ -313,6 +369,7 @@ if RUN_CLAM:
             dxy=out("clam/{prefix}_dxy.tsv"),
             fst=out("clam/{prefix}_fst.tsv"),
             window=config["clam_window"],
+            clam_path=CLAM_PATH,
         threads: config["clam_threads"]
         conda:
             "../envs/clam.yml"
@@ -324,11 +381,13 @@ if RUN_CLAM:
             if [ -s {input.exclude_file} ]; then
               EXCLUDE_ARG="--exclude-file {input.exclude_file}"
             fi
+            {params.clam_path}
             clam stat \
               -o {params.outdir} \
               -w {params.window} \
               -c {params.zarr} \
               -r {input.roh_bed} \
+              --samples {input.samples_tsv} \
               --force-samples \
               -t {threads} \
               $EXCLUDE_ARG \
@@ -407,9 +466,11 @@ if RUN_CLAM:
             roh_files=clam_roh_inputs,
         output:
             bed_gz=out("clam/combined_roh_{size}.bed.gz"),
-            bed_tbi=out("clam/combined_roh_{size}.bed.gz.tbi"),
+            bed_tbi=out("clam/combined_roh_{size}.bed.gz." + CLAM_IDX),
         wildcard_constraints:
             size=r"\d+",
+        params:
+            csi=TABIX_CSI,
         conda:
             "../envs/clam.yml"
         log:
@@ -421,7 +482,7 @@ if RUN_CLAM:
               | awk -v m={wildcards.size} 'BEGIN{{OFS="\\t"}} NF>=4 && ($3-$2)>=m {{print $1,$2,$3,$4}}' \
               | sort -k1,1 -k2,2n \
               | bgzip -c > {output.bed_gz}
-            tabix -p bed {output.bed_gz}
+            tabix {params.csi} -p bed {output.bed_gz}
             """
 
     rule clam_het_roh_extra:
@@ -434,10 +495,11 @@ if RUN_CLAM:
         input:
             zarr_done=out("clam/callable.zarr.done"),
             vcf=out("clam/variants.vcf.gz"),
-            tbi=out("clam/variants.vcf.gz.tbi"),
+            tbi=out("clam/variants.vcf.gz." + CLAM_IDX),
             roh_bed=out("clam/combined_roh_{size}.bed.gz"),
-            roh_tbi=out("clam/combined_roh_{size}.bed.gz.tbi"),
+            roh_tbi=out("clam/combined_roh_{size}.bed.gz." + CLAM_IDX),
             exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+            samples_tsv=out("clam/samples.tsv"),  # populations; see clam_stat
         output:
             het=out("clam/{prefix}_heterozygosity_roh{size}.tsv"),
         wildcard_constraints:
@@ -446,6 +508,7 @@ if RUN_CLAM:
             zarr=out("clam/callable.zarr"),
             outdir=out("clam/stat_roh{size}"),
             window=config["clam_window"],
+            clam_path=CLAM_PATH,
         threads: config["clam_threads"]
         conda:
             "../envs/clam.yml"
@@ -458,11 +521,13 @@ if RUN_CLAM:
               EXCLUDE_ARG="--exclude-file {input.exclude_file}"
             fi
             rm -rf {params.outdir}; mkdir -p {params.outdir}
+            {params.clam_path}
             clam stat \
               -o {params.outdir} \
               -w {params.window} \
               -c {params.zarr} \
               -r {input.roh_bed} \
+              --samples {input.samples_tsv} \
               --force-samples \
               -t {threads} \
               $EXCLUDE_ARG \
