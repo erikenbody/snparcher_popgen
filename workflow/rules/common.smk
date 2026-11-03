@@ -197,6 +197,9 @@ def workflow_targets():
         targets.append(out("ne/{prefix}_ne.done"))
     if RUN_CLAM:
         targets.append(out("clam/{prefix}_manhattan.done"))
+        targets += expand(
+            out("clam/{prefix}_summary_het_roh{size}.csv"), size=config["clam_extra_roh_min_sizes"]
+        )
     if RUN_TRACKHUB:
         targets.append(out("trackhub/hub.txt"))
     return targets

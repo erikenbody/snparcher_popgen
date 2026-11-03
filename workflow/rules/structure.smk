@@ -110,11 +110,35 @@ rule admixture:
         TMP=$(mktemp -d)
         trap 'rm -rf $TMP' EXIT
         cd $TMP
-        admixture --cv=5 -j{threads} --seed={wildcards.seed} $BED {wildcards.K} > $LOG 2>&1
+        # Some seeds send the main fit's log-likelihood to NaN; a NaN delta
+        # never meets the convergence criterion, so ADMIXTURE then iterates
+        # until killed (102-Parnassius K=8: NaN at iteration 30, three 12 h
+        # timeouts). Watch the log up to "Summary:" (NaN in a later CV fold
+        # is harmless: the fit is done and admixture_cloud.R drops NaN CV
+        # errors), and on NaN stop it and record the seed as failed: an NA Q
+        # matrix and a "Loglikelihood: nan" line, which admixture_best_seed
+        # skips. Every K keeps the same seed set.
+        admixture --cv=5 -j{threads} --seed={wildcards.seed} $BED {wildcards.K} > $LOG 2>&1 &
+        PID=$!
+        NAN=false
+        while kill -0 $PID 2>/dev/null; do
+            if sed '/^Summary/q' $LOG | grep -qE '^[0-9]+ \\((EM|QN/Block)\\).*Loglikelihood: -?nan'; then
+                kill $PID; NAN=true; break
+            fi
+            sleep 30
+        done
+        STATUS=0; wait $PID || STATUS=$?
 
         BASE=$(basename $BED .bed)
-        mv $BASE.{wildcards.K}.P $POUT
-        mv $BASE.{wildcards.K}.Q $QOUT
+        if $NAN; then
+            printf '\\n# Stopped: the log-likelihood became NaN; this seed is recorded as failed.\\nLoglikelihood: nan\\n' >> $LOG
+            awk -v k={wildcards.K} '{{ s = "nan"; for (i = 2; i <= k; i++) s = s " nan"; print s }}' {input.fam} > $QOUT
+            : > $POUT
+        else
+            [ $STATUS -eq 0 ] || exit $STATUS
+            mv $BASE.{wildcards.K}.P $POUT
+            mv $BASE.{wildcards.K}.Q $QOUT
+        fi
         """
 
 

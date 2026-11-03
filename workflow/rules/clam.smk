@@ -395,3 +395,96 @@ if RUN_CLAM:
             logp("clam/{prefix}_manhattan.log"),
         script:
             "../scripts/plot_clam_manhattan.py"
+
+    # --- heterozygosity outside ROH at other ROH cutoffs ----------------------
+    # New rules rather than wildcards on clam_combine_roh/clam_stat, so adding
+    # them changed nothing for runs that already have those outputs.
+
+    rule clam_combine_roh_extra:
+        """As clam_combine_roh, keeping runs of at least {size} bp."""
+        input:
+            pops_done=out("populations/{prefix}_populations-done.txt"),
+            roh_files=clam_roh_inputs,
+        output:
+            bed_gz=out("clam/combined_roh_{size}.bed.gz"),
+            bed_tbi=out("clam/combined_roh_{size}.bed.gz.tbi"),
+        wildcard_constraints:
+            size=r"\d+",
+        conda:
+            "../envs/clam.yml"
+        log:
+            logp("clam/{prefix}_combine_roh_{size}.log"),
+        shell:
+            """
+            exec 2> {log}
+            cat {input.roh_files} \
+              | awk -v m={wildcards.size} 'BEGIN{{OFS="\\t"}} NF>=4 && ($3-$2)>=m {{print $1,$2,$3,$4}}' \
+              | sort -k1,1 -k2,2n \
+              | bgzip -c > {output.bed_gz}
+            tabix -p bed {output.bed_gz}
+            """
+
+    rule clam_het_roh_extra:
+        """Per-window heterozygosity in and out of ROH >= {size} bp.
+
+        `clam stat` again on the kept callable store and variants, with the
+        other ROH BED. It also recomputes pi (and dxy/Fst), identical to
+        clam_stat's; those are discarded.
+        """
+        input:
+            zarr_done=out("clam/callable.zarr.done"),
+            vcf=out("clam/variants.vcf.gz"),
+            tbi=out("clam/variants.vcf.gz.tbi"),
+            roh_bed=out("clam/combined_roh_{size}.bed.gz"),
+            roh_tbi=out("clam/combined_roh_{size}.bed.gz.tbi"),
+            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+        output:
+            het=out("clam/{prefix}_heterozygosity_roh{size}.tsv"),
+        wildcard_constraints:
+            size=r"\d+",
+        params:
+            zarr=out("clam/callable.zarr"),
+            outdir=out("clam/stat_roh{size}"),
+            window=config["clam_window"],
+        threads: config["clam_threads"]
+        conda:
+            "../envs/clam.yml"
+        log:
+            logp("clam/{prefix}_stat_roh{size}.log"),
+        shell:
+            """
+            EXCLUDE_ARG=""
+            if [ -s {input.exclude_file} ]; then
+              EXCLUDE_ARG="--exclude-file {input.exclude_file}"
+            fi
+            rm -rf {params.outdir}; mkdir -p {params.outdir}
+            clam stat \
+              -o {params.outdir} \
+              -w {params.window} \
+              -c {params.zarr} \
+              -r {input.roh_bed} \
+              --force-samples \
+              -t {threads} \
+              $EXCLUDE_ARG \
+              {input.vcf} > {log} 2>&1
+            mv {params.outdir}/heterozygosity.tsv {output.het}
+            rm -rf {params.outdir}
+            """
+
+    rule clam_summary_het_roh_extra:
+        """Genome-wide heterozygosity outside ROH >= {size} bp, per sample and population."""
+        input:
+            het=out("clam/{prefix}_heterozygosity_roh{size}.tsv"),
+            fai=CONTIGS,
+        output:
+            summary=out("clam/{prefix}_summary_het_roh{size}.csv"),
+        wildcard_constraints:
+            size=r"\d+",
+        params:
+            min_scaffold_size=config["min_scaffold_size"],
+        conda:
+            "../envs/clam.yml"
+        log:
+            logp("clam/{prefix}_summary_het_roh{size}.log"),
+        script:
+            "../scripts/summarize_clam_het.py"

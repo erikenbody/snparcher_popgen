@@ -91,6 +91,7 @@ clam_mean_depth_sd_scale: 2
 clam_depths_zarr_dir: null   # e.g. /bulk/depths/{prefix}
 clam_keep_depths_zarr: false
 clam_threads: 16
+clam_extra_roh_min_sizes: [100000]  # extra ROH cutoffs for het outside ROH; [] to skip
 
 # --- UCSC track hub ---------------------------------------------------------
 run_trackhub: false          # needs refgenome, callable_sites_bed, trackhub_email

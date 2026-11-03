@@ -372,6 +372,18 @@ properties:
     type: integer
     default: 16
     description: Threads for clam collect/loci/stat.
+  clam_extra_roh_min_sizes:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    default: [100000]
+    description: >-
+      Extra ROH length cutoffs (bp) for heterozygosity outside ROH, besides
+      roh_min_size. Each reruns only `clam stat` on the kept callable store,
+      with ROH of at least that length, and writes
+      clam/{prefix}_heterozygosity_roh{size}.tsv and
+      clam/{prefix}_summary_het_roh{size}.csv. Empty to skip.
 
   # ---------------------------------------------------------------- trackhub
   run_trackhub:

@@ -13,6 +13,7 @@ import sys as _sys
 if "snakemake" in globals() and getattr(snakemake, "log", None):
     _sys.stdout = _sys.stderr = open(snakemake.log[0], "w")
 
+import math
 import re
 import shutil
 from pathlib import Path
@@ -40,11 +41,16 @@ def main(logs, qfiles, ks, seeds, out_q, out_log, table):
     rows = []
     for k, q_dest, log_dest in zip(ks, out_q, out_log):
         lik = {s: final_loglik(log_of[k, s]) for s in seeds}
-        best = max(seeds, key=lambda s: lik[s])
+        # A seed whose fit went to NaN (see rule admixture) is skipped.
+        ok = [s for s in seeds if not math.isnan(lik[s])]
+        if not ok:
+            raise ValueError(f"K={k}: every seed's log-likelihood is NaN")
+        best = max(ok, key=lambda s: lik[s])
         shutil.copyfile(q_of[k, best], q_dest)
         shutil.copyfile(log_of[k, best], log_dest)
-        spread = max(lik.values()) - min(lik.values())
-        print(f"K={k}: seed {best} (loglik {lik[best]:.3f}; range across seeds {spread:.3f})")
+        spread = max(lik[s] for s in ok) - min(lik[s] for s in ok)
+        failed = f"; NaN, skipped: {', '.join(map(str, sorted(set(seeds) - set(ok))))}" if len(ok) < len(seeds) else ""
+        print(f"K={k}: seed {best} (loglik {lik[best]:.3f}; range across seeds {spread:.3f}{failed})")
         for s in seeds:
             rows.append(f"{k}\t{s}\t{lik[s]:.6f}\t{str(s == best).lower()}")
 
