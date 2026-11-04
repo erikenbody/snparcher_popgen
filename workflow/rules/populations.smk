@@ -164,8 +164,10 @@ rule population_roh:
     input:
         vcf=out("populations/{prefix}_population_vcf/population_{k}.vcf.gz"),
     output:
-        # bcftools roh's per-site output is large; only the RG (region) lines
-        # are used, and those are kept below.
+        # Only the RG (region) lines are used; -Orz writes just those, without
+        # bcftools roh's per-site, per-sample lines (2-Doryteuthis, 98 samples
+        # x 280M sites: >100 GB and >13 h with them; on a 2.7M-site contig
+        # -Orz took 81 s vs 396 s with identical RG lines).
         roh=temp(out("populations/{prefix}_roh/population_{k}.roh.gz")),
         rg=out("populations/{prefix}_roh/population_{k}.rg.roh"),
     threads: 10
@@ -178,7 +180,7 @@ rule population_roh:
     shell:
         """
         exec 2> {log}
-        bcftools roh --threads {threads} -G30 -Oz -o {output.roh} {input.vcf}
+        bcftools roh --threads {threads} -G30 -Orz -o {output.roh} {input.vcf}
         zgrep -E '^RG[[:space:]]|# RG' {output.roh} > {output.rg}
         """
 
