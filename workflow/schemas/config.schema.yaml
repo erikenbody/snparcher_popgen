@@ -185,6 +185,48 @@ properties:
       Scaffolds shorter than this (bp) are excluded from genome-wide summaries
       of pi/heterozygosity/F_ROH.
 
+  # ------------------------------------------------------------- scaffold QC
+  sex_id_window:
+    type: integer
+    default: 10000
+    minimum: 1
+    description: >
+      Scaffold QC (sex_id): window size (bp). Genotypes are counted in one window
+      per sex_id_step bp on every scaffold >= 1 Mb.
+  sex_id_step:
+    type: integer
+    default: 100000
+    minimum: 1
+    description: >
+      Scaffold QC (sex_id): spacing of the windows (bp). window / step is the
+      share of the genome read (default 10%).
+  sex_id_rule_min_size:
+    type: integer
+    default: 1000000
+    minimum: 1000000
+    description: >
+      Scaffolds at least this long (bp) are tested by the scaffold QC rules (zero
+      het, low het in all samples, half depth in a subset) and excluded when one
+      applies. Shorter scaffolds down to 1 Mb are kept untested; scaffolds < 1 Mb
+      are always excluded. Set to min_scaffold_size to test only the scaffolds
+      F_ROH uses.
+  sex_id_exclude:
+    type: array
+    items:
+      type: string
+    default: []
+    description: >
+      Scaffolds to exclude from every per-population analysis in addition to the
+      scaffold QC's calls (e.g. a sex chromosome it missed).
+  sex_id_keep:
+    type: array
+    items:
+      type: string
+    default: []
+    description: >
+      Scaffolds to keep even if the scaffold QC (or sex_id_exclude) would exclude
+      them. Applies to scaffolds < 1 Mb too.
+
   # ---------------------------------------------------------------------- Ne
   run_ne:
     type: boolean

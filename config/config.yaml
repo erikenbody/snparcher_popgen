@@ -64,6 +64,13 @@ roh_merge_gap: 10000
 pi_window: 10000
 min_scaffold_size: 10000000
 
+# --- scaffold QC (sex-linked scaffolds, haplotigs; README) -----------------
+sex_id_window: 10000          # genotypes counted in one window ...
+sex_id_step: 100000           # ... per this many bp (10% of the genome)
+sex_id_rule_min_size: 1000000 # scaffolds this long are tested; < 1 Mb always excluded
+sex_id_exclude: []            # scaffolds to exclude as well, by name
+sex_id_keep: []               # scaffolds never to exclude
+
 # --- Ne: GONE2 (recent) + currentNe2 (contemporary) -------------------------
 run_ne: false
 ne_tools_dir: resources/ne_tools   # shared absolute path => build once

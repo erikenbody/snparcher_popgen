@@ -242,10 +242,20 @@ def _open_text(path):
         return gzip.open(path, 'rt')
     return open(path, 'r')
 
-def load_bed_file(bed_path, fai_path):
+def read_excluded(path):
+    """Scaffold names from the sex_id exclude list (one per line; may be empty)."""
+    if not path:
+        return set()
+    with open(path) as f:
+        return {line.strip() for line in f if line.strip()}
+
+def load_bed_file(bed_path, fai_path, excluded=frozenset()):
     # calculate the total length of callable sequence based on a bed file of callable regions.
     # A BED made against another assembly (different contig names) would give a
     # plausible but wrong denominator, so every contig must be in the fai.
+    # Excluded scaffolds (sex_id) are not in the population VCF, so their callable
+    # bases are left out: counting them biased pi and heterozygosity low by the
+    # excluded share of the callable genome (every scaffold < 1 Mb among them).
     contigs = {line.split('\t')[0] for line in open(fai_path)}
     total_length = 0
     unknown = set()
@@ -260,6 +270,8 @@ def load_bed_file(bed_path, fai_path):
             chrom, start, end = fields[:3]
             if chrom not in contigs:
                 unknown.add(chrom)
+            if chrom in excluded:
+                continue
             total_length += int(end) - int(start)
 
     if unknown:
@@ -269,27 +281,33 @@ def load_bed_file(bed_path, fai_path):
         )
     return total_length
 
-def load_fai_length(fai_path):
+def load_fai_length(fai_path, excluded=frozenset()):
     # total assembly length, used as the denominator when no callable-sites bed
     # is available. This over-counts: sites that were never callable are still
     # in the denominator, so pi and heterozygosity come out biased low.
+    # Excluded scaffolds (sex_id) are left out, as for the bed.
     total_length = 0
 
     with open(fai_path, 'r') as fai_file:
         for line in fai_file:
             fields = line.split('\t')
+            if fields[0] in excluded:
+                continue
             total_length += int(fields[1])
 
     return total_length
 
-def main(vcf_path, bed_path, fai_path, k_value, ccgp_project_id, roh_file):
+def main(vcf_path, bed_path, fai_path, k_value, ccgp_project_id, roh_file, exclude_path=None):
 
+    excluded = read_excluded(exclude_path)
     if bed_path:
-        total_length = load_bed_file(bed_path, fai_path)
-        print(f"denominator: {total_length} callable bp from {bed_path}")
+        total_length = load_bed_file(bed_path, fai_path, excluded)
+        print(f"denominator: {total_length} callable bp from {bed_path}, "
+              f"without {len(excluded)} excluded scaffolds")
     else:
-        total_length = load_fai_length(fai_path)
-        print(f"denominator: {total_length} bp (whole assembly, no callable-sites bed)")
+        total_length = load_fai_length(fai_path, excluded)
+        print(f"denominator: {total_length} bp (whole assembly, no callable-sites bed), "
+              f"without {len(excluded)} excluded scaffolds")
 
     samples, het_counts, sum_pairwise_diff = scan_genotypes(vcf_path)
     heterozygosity_df = calculate_sample_heterozygosity(samples, het_counts, total_length)
@@ -353,7 +371,9 @@ if __name__ == "__main__":
     #out_het_not_roh = snakemake.output["out_het_not_roh"]
     out_het = snakemake.output["out_het"]
 
-    main(vcf_input, bed_input, fai, k_value, ccgp_project_id, roh_file)
+    exclude_input = snakemake.input.get("exclude_scaffolds")
+
+    main(vcf_input, bed_input, fai, k_value, ccgp_project_id, roh_file, exclude_input)
 
 # Old version of the function
 # def calculate_mean_pairwise_diff_not_roh(vcf_path, roh_file):

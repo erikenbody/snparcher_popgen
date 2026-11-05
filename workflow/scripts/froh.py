@@ -12,12 +12,28 @@ import tempfile
 import psutil
 import os
 
-def calc_roh(roh, fai, output, population, min_roh_size, min_scaffold_size):
-    dffai = pd.read_table(fai, sep='\t', header=None)
+def read_excluded(path):
+    """Scaffold names from the sex_id exclude list (one per line; may be empty)."""
+    if not path:
+        return set()
+    with open(path) as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def calc_roh(roh, fai, output, population, min_roh_size, min_scaffold_size, exclude=None):
+    dffai = pd.read_table(fai, sep='\t', header=None, dtype={0: str})
     # Restrict to long scaffolds: F_ROH is a fraction of the genome, and short
     # scaffolds contribute length to the denominator while being too short to
     # detect a run of homozygosity in.
     dffai = dffai[dffai[1] > int(min_scaffold_size)]
+    # Scaffolds excluded by sex_id are not in the population VCF, so no ROH can be
+    # called on them: their length must leave the denominator too. Keeping it
+    # there biased F_ROH low by the excluded share of the long scaffolds.
+    excluded = read_excluded(exclude)
+    n_long = len(dffai)
+    dffai = dffai[~dffai[0].isin(excluded)]
+    print(f"{n_long} scaffolds > {min_scaffold_size} bp; {n_long - len(dffai)} of them "
+          f"excluded by sex_id; denominator {dffai[1].sum()} bp")
     chroms = dffai[0].values
 
     # A fragmented assembly has no scaffold long enough to measure F_ROH on.
@@ -25,7 +41,7 @@ def calc_roh(roh, fai, output, population, min_roh_size, min_scaffold_size):
     # run (pi, heterozygosity, the ROH plot) goes ahead without it.
     if dffai.empty:
         print(f"No scaffolds longer than min_scaffold_size ({min_scaffold_size} bp) "
-              f"in {fai}; F_ROH not computed.")
+              f"left in {fai}; F_ROH not computed.")
         for path in (output, output.replace(".froh", "_top.froh")):
             with open(path, "w"):
                 pass
@@ -33,7 +49,8 @@ def calc_roh(roh, fai, output, population, min_roh_size, min_scaffold_size):
 
     glength = dffai[1].sum()
     
-    dfroh = pd.read_table(roh, sep='\t', header=None, names=['chrom', 'start', 'end', 'sample'])
+    dfroh = pd.read_table(roh, sep='\t', header=None, names=['chrom', 'start', 'end', 'sample'],
+                          dtype={'chrom': str, 'sample': str})
     dfroh['length'] = dfroh['end'] - dfroh['start']
     dfroh = dfroh[dfroh['length'] > int(min_roh_size)]  # only look at 500kbp ROH and longer
     dfroh = dfroh[dfroh['chrom'].isin(chroms)]
@@ -78,9 +95,10 @@ def main():
     population = snakemake.params["population"]
     min_roh_size = snakemake.params["min_roh_size"]
     min_scaffold_size = snakemake.params["min_scaffold_size"]
+    exclude = snakemake.input.get("exclude_scaffolds")
 
     calc_roh(roh_input, fai_input, froh_output, population, min_roh_size,
-             min_scaffold_size)
+             min_scaffold_size, exclude)
 
 if __name__ == "__main__":
     main()

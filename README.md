@@ -82,15 +82,34 @@ The workflow removes exactly two things of its own accord:
 - **samples with no coordinates**, when `use_coords: true` — so that every
   analysis sees the same sample set. Allele counts and AF are recomputed
   afterwards, so sites that became invariant do not linger.
-- **sex-linked and anomalous scaffolds**, detected from relative depth and
+- **scaffolds < 1 Mb, sex-linked scaffolds, haplotigs and other scaffolds
+  without diploid heterozygosity**, detected from relative depth and
   heterozygosity in `populations`, and excluded from every per-population VCF,
-  from the Ne analyses and from clam.
+  from the F_ROH and pi denominators, from the Ne analyses and from clam.
 
 Note that the second of those applies to the per-population statistics (ROH,
 F_ROH, pi, Ne, clam) but *not* to `prepare`, so PCA, ADMIXTURE and TESS are
 computed including sex-linked scaffolds. Inspect
-`populations/{prefix}_sex_id/{prefix}_sex_chromosome_candidates.csv` — if a large
-scaffold is flagged, it is worth knowing that the structure results saw it.
+`populations/{prefix}_sex_id/{prefix}_scaffold_calls.tsv` — if a large scaffold
+is excluded, it is worth knowing that the structure results saw it.
+
+The scaffold QC counts genotypes in a 10 kb window every 100 kb of every
+scaffold >= 1 Mb (all SNPs, not the LD-pruned set), normalises each sample's
+heterozygosity and depth to its typical value on the scaffolds >= 5 Mb that
+carry signal, and excludes a scaffold when (`sex_id_rule_min_size` and longer):
+
+| call | rule | what it catches |
+|---|---|---|
+| zero het | median normalised het < 0.1 | a Y or W, haplotigs |
+| low het in all | >= 85% of samples below 0.25 | collapsed or duplicated sequence |
+| hemizygous in a subset (X/Z) | >= 5 samples (and >= 5%) below 0.7 depth while >= 5 are above 0.85, the half-depth group at median depth <= 0.6 with >= 40% of it below 0.25 het; or >= 5 samples (and >= 10%) below 0.25 het at <= 0.9 x the depth of >= 5 others | the heterogametic sex's X or Z, or carriers of a large deletion |
+| half depth, low het in most | median depth < 0.7 and >= 30% of samples below 0.25 het | sequence present once per genome in most samples |
+
+A scaffold where 30-85% of samples have low het at normal depth is reported as
+"hemizygous pattern, full depth" but kept (an inversion, an ROH hotspot or an
+artefact). `sex_id_exclude` adds scaffolds by name and `sex_id_keep` rescues
+them. An assembly with no scaffold >= 5 Mb is too fragmented to normalise and
+nothing is excluded but `sex_id_exclude`.
 
 ### The coordinate sheet
 
@@ -253,7 +272,7 @@ Under `outdir` (default `results/popgen/`):
 | `populations/{prefix}_ancestry_final.pdf` | the assignment actually used |
 | `populations/{prefix}_populations/` | one sample list per population |
 | `populations/{prefix}_populations-done.txt` | K, method, threshold, excluded samples |
-| `populations/{prefix}_sex_id/` | candidate sex-linked and anomalous scaffolds |
+| `populations/{prefix}_sex_id/` | scaffold QC: `_scaffold_calls.tsv` (every scaffold >= 1 Mb: call, evidence), `_exclude_scaffolds.txt`, window counts, plot |
 | `populations/{prefix}_population_pi/` | pi and per-sample heterozygosity |
 | `populations/{prefix}_merged_roh/` | ROH, F_ROH and ROH figures |
 | `ne/{prefix}_gone2_Ne_final.pdf` | **Ne trajectories under each population's chosen model** |
@@ -268,11 +287,13 @@ Under `outdir` (default `results/popgen/`):
 
 Logs are under `logdir` (default `logs/popgen/`).
 
-Sex-linked and anomalous scaffolds are excluded from every per-population VCF
-and from clam. Inspect `{prefix}_sex_chromosome_candidates.csv` and
-`{prefix}_scaffold_anomalies.csv` — the detection is a heuristic based on
-relative depth and heterozygosity, and on small or sparse datasets it flags more
-than it should.
+Sex-linked and anomalous scaffolds are excluded from every per-population VCF,
+from the F_ROH and pi denominators and from clam. Inspect
+`{prefix}_scaffold_calls.tsv` (`_sex_chromosome_candidates.csv` lists the
+excluded ones) — the detection is a heuristic based on relative depth and
+heterozygosity; correct it per project with `sex_id_exclude` / `sex_id_keep`.
+`{prefix}_scaffold_anomalies.csv` is an older, report-only screen with absolute
+thresholds.
 
 ## Test data
 

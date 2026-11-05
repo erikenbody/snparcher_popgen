@@ -2,7 +2,8 @@
 
 Order of operations:
   1. sex-linked and anomalous scaffolds are identified from depth and
-     heterozygosity, and excluded from every per-population VCF
+     heterozygosity, and excluded from every per-population VCF and from the
+     F_ROH and pi denominators
   2. samples are assigned to populations (checkpoint: the number of populations
      is not known until the ancestry coefficients have been inspected)
   3. per population: ROH -> F_ROH, pi and heterozygosity, per-individual pi and
@@ -24,37 +25,93 @@ Outputs, under {outdir}/populations/:
 
 # ---------------------------------------------------------------- scaffold QC
 rule sex_id_extract:
-    """Pull CHROM/SAMPLE/DP/GT out of the pruned VCF for the scaffold QC below."""
+    """Genotype counts in evenly spaced windows of the analysis set, for the
+    scaffold QC below.
+
+    Windows of sex_id_window bp, one centred in every sex_id_step bp, on scaffolds
+    >= 1 Mb (shorter ones are excluded outright): ~10% of the genome by default.
+    All SNPs in those windows, not the LD-pruned set, because pruning thins
+    low-recombination scaffolds harder and so distorts het per bp between
+    scaffolds. The window list is split across threads, each a bcftools query |
+    awk stream; mawk is ~1.5x faster than gawk here and is used when present.
+    """
     input:
-        vcf=out("prepare/{prefix}_pruned_ld.vcf.gz"),
-        idx=out("prepare/{prefix}_pruned_ld.vcf.gz.csi"),
+        vcf=out("prepare/{prefix}_analysis_set.vcf.gz"),
+        idx=out("prepare/{prefix}_analysis_set.vcf.gz.csi"),
+        contigs=CONTIGS,
     output:
-        # One row per site per sample; only sex_id_analyze reads it.
-        raw_data=temp(out("populations/{prefix}_sex_id/{prefix}_raw_data.tsv.gz")),
+        # per window x sample: called, het, summed DP (see sex_id_window_counts.awk)
+        counts=out("populations/{prefix}_sex_id/{prefix}_window_counts.tsv.gz"),
+        samples=out("populations/{prefix}_sex_id/{prefix}_window_samples.txt"),
     params:
-        query_format=r"[%CHROM\t%SAMPLE\t%DP\t%GT\n]",
+        window=config["sex_id_window"],
+        step=config["sex_id_step"],
+        awk_script=str(WORKFLOW_DIR / "scripts" / "sex_id_window_counts.awk"),
+    threads: 4
+    resources:
+        mem_mb=4000,
     conda:
         "../envs/bcftools.yml"
     log:
         logp("populations/{prefix}_sex_id_extract.log"),
     shell:
-        "bcftools query -f '{params.query_format}' {input.vcf} | gzip > {output.raw_data} 2> {log}"
+        """
+        exec 2> {log}
+        AWK=$(command -v mawk || command -v awk)
+        TMP=$(mktemp -d {output.counts}.tmp.XXXXXX)
+        trap 'rm -rf "$TMP"' EXIT
+        bcftools query -l {input.vcf} > {output.samples}
+        # 1-based inclusive regions, one window centred in each step-sized block
+        awk -v w={params.window} -v s={params.step} 'BEGIN {{OFS = "\\t"; o = int((s - w) / 2)}}
+            $2 >= 1000000 {{for (b = 0; b + o + w <= $2; b += s) print $1, b + o + 1, b + o + w}}' \
+            {input.contigs} > "$TMP/regions.tsv"
+        echo "$(wc -l < "$TMP/regions.tsv") windows, $AWK, {threads} streams" >&2
+        if [ ! -s "$TMP/regions.tsv" ]; then
+            gzip < /dev/null > {output.counts}
+            exit 0
+        fi
+        split -n l/{threads} -d "$TMP/regions.tsv" "$TMP/part."
+        pids=()
+        for r in "$TMP"/part.*; do
+            [ -s "$r" ] || continue  # fewer windows than threads
+            ( bcftools query -R "$r" -f '%CHROM\\t%POS[\\t%GT:%DP]\\n' {input.vcf} \
+                | "$AWK" -v step={params.step} -f {params.awk_script} > "$r.counts" ) &
+            pids+=($!)
+        done
+        for p in "${{pids[@]}}"; do wait "$p"; done
+        cat "$TMP"/part.*.counts | gzip > {output.counts}
+        """
 
 
 rule sex_id_analyze:
-    """Flag candidate sex-linked scaffolds from normalised depth + heterozygosity.
+    """Scaffolds to exclude: zero-het, low-het-in-all and half-depth (X/Z)
+    scaffolds, plus every scaffold < 1 Mb (scripts/identify_sex_linked_scaffolds.py
+    documents the rules).
 
-    The exclude list this produces is applied to every per-population VCF and to
-    clam, so that sex-linked scaffolds do not distort diversity estimates.
+    The exclude list this produces is applied to every per-population VCF, to the
+    F_ROH and pi denominators, to Ne and to clam, so that sex-linked scaffolds,
+    haplotigs and collapsed sequence do not distort diversity estimates.
     """
     input:
-        raw_data=out("populations/{prefix}_sex_id/{prefix}_raw_data.tsv.gz"),
-        vcf_path_for_lengths=out("prepare/{prefix}_pruned_ld.vcf.gz"),
+        counts=out("populations/{prefix}_sex_id/{prefix}_window_counts.tsv.gz"),
+        samples=out("populations/{prefix}_sex_id/{prefix}_window_samples.txt"),
+        contigs=CONTIGS,
     output:
+        # scaffolds >= 1 Mb that were excluded, with the call and its evidence
         report=out("populations/{prefix}_sex_id/{prefix}_sex_chromosome_candidates.csv"),
+        # every scaffold >= 1 Mb: call, excluded, evidence
+        calls=out("populations/{prefix}_sex_id/{prefix}_scaffold_calls.tsv"),
         data=out("populations/{prefix}_sex_id/{prefix}_depth_heterozygosity.csv"),
         plot=out("populations/{prefix}_sex_id/{prefix}_chromosome_depth_heterozygosity.png"),
         exclude_scaffolds=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+    params:
+        window=config["sex_id_window"],
+        step=config["sex_id_step"],
+        rule_min_size=config["sex_id_rule_min_size"],
+        extra_exclude=config["sex_id_exclude"],
+        keep=config["sex_id_keep"],
+    resources:
+        mem_mb=16000,
     conda:
         "../envs/sex_id.yml"
     log:
@@ -202,10 +259,16 @@ rule merge_roh:
 
 
 rule froh:
-    """F_ROH per sample: fraction of the genome in ROH >= roh_min_size."""
+    """F_ROH per sample: fraction of the genome in ROH >= roh_min_size.
+
+    The genome is the scaffolds > min_scaffold_size that are not excluded: ROH
+    cannot be called on excluded scaffolds (they are not in the population VCF),
+    so their length is left out of the denominator too.
+    """
     input:
         rg=out("populations/{prefix}_merged_roh/population_{k}.rg.roh"),
         fai=CONTIGS,
+        exclude_scaffolds=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
     output:
         froh=out("populations/{prefix}_merged_roh/{prefix}_population_{k}.froh"),
         top=out("populations/{prefix}_merged_roh/{prefix}_population_{k}_top.froh"),
@@ -226,12 +289,14 @@ rule population_pi:
     """Genome-wide pi and per-sample heterozygosity for one population.
 
     The denominator is the callable-sites BED when one is configured, otherwise
-    the whole assembly length — see scripts/calculate_pi.py.
+    the whole assembly length, in both cases without the excluded scaffolds, whose
+    variants are not in the population VCF — see scripts/calculate_pi.py.
     """
     input:
         pop_vcf=out("populations/{prefix}_population_vcf/population_{k}.vcf.gz"),
         roh_file=out("populations/{prefix}_merged_roh/population_{k}.rg.roh"),
         fai=CONTIGS,
+        exclude_scaffolds=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
         bed=[CALLABLE_BED] if USE_BED else [],
     output:
         out_pi=out("populations/{prefix}_population_pi/pi_population_{k}.csv"),
