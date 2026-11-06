@@ -72,8 +72,13 @@ if RUN_CLAM:
         .fam is the analysis set's sample list and exists once the assignment
         checkpoint has run.
         """
-        active_k()  # gate on the assignment checkpoint
         fam = Path(out("structure/admixture/{prefix}.fam"))
+        # Gate on the assignment checkpoint only when the .fam does not exist
+        # yet (a fresh run). Otherwise collect would depend on the checkpoint,
+        # and rerunning the assignment (a change of K or exclude_samples) would
+        # redo collect, i.e. download every GVCF again.
+        if not fam.exists():
+            active_k()
         return [line.split()[1] for line in fam.read_text().splitlines() if line.strip()]
 
     def clam_gvcf_inputs(wc):
