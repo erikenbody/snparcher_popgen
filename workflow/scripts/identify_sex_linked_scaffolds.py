@@ -22,10 +22,15 @@ Scaffolds of at least sex_id_rule_min_size are excluded when they are
   X/Z             a subset of samples is hemizygous, as the heterogametic sex is
                   on its X or Z (or carriers of a large deletion), by either of
                   half depth: >= 5 samples (and >= 5%) below 0.7 depth while >= 5
-                    are above 0.85; the half-depth group's median depth <= 0.6 and
-                    >= 40% of it below 0.25 het. Subsets at 0.6-0.7 depth with
-                    normal het are batches or low-coverage libraries, not
-                    hemizygosity (17-Lottia, 91-Azolla)
+                    are above 0.85; the half-depth group's median depth <= 0.6,
+                    and either tight (interquartile range <= 0.05) or >= 40% of it
+                    below 0.25 het. A tight group at half depth is hemizygous
+                    whatever its het: W/Y gametologs or paralogs give hemizygous
+                    samples het calls (41-Chamaea Z: 29 recorded females at 0.49
+                    depth with het 0.58; 98-Aquila; 107-Gasterosteus chr19).
+                    Subsets at 0.6-0.7 depth, or loosely spread, with normal het
+                    are batches or low-coverage libraries (17-Lottia, 91-Azolla,
+                    92-Rubus)
                   het split: >= 5 samples (and >= 10%) below 0.25 het and >= 5
                     above, the low-het ones at <= 0.9 x the others' median depth
                     (partly sex-linked scaffolds: 41-Melanerpes, low-het group at
@@ -77,6 +82,7 @@ HALF_DEPTH = 0.70       # a sample below this depth on a scaffold is in its half
 FULL_DEPTH = 0.85
 HALF_GROUP_DEPTH = 0.60  # X/Z: the half-depth group's median depth at most this
 HALF_GROUP_LOWHET = 0.40  # X/Z: at least this share of the half-depth group below LOW_HET
+HALF_GROUP_IQR = 0.05   # X/Z: ... or the half-depth group's depth this tight (IQR)
 LOWHET_DEPTH_RATIO = 0.90  # X/Z: low-het samples' median depth / normal-het samples'
 LOWHET_SUBSET = 0.10    # X/Z by het split: low-het samples at least this share
 MIN_GROUP = 5
@@ -87,7 +93,8 @@ EXCLUDE_CALLS = ("zero het", "low het in all", HALF_MOST, XZ)
 CALL_COLUMNS = [
     "chrom", "length", "call", "excluded", "reason", "n_samples", "het_med",
     "frac_low_het", "depth_med", "depth_lowhet", "depth_normhet", "n_half_depth",
-    "n_full_depth", "depth_half_depth", "frac_half_depth_lowhet", "het_half_depth",
+    "n_full_depth", "depth_half_depth", "depth_half_depth_iqr", "frac_half_depth_lowhet",
+    "het_half_depth",
     "het_full_depth", "n_lowhet", "n_normhet", "n_windows", "n_hot_windows",
 ]
 DATA_COLUMNS = ["Sample", "Chromosome", "Depth", "Heterozygosity",
@@ -247,6 +254,8 @@ def main(counts_path, samples_path, contigs_path, out, window, step, rule_min, e
             n_normhet=int((both & (h >= LOW_HET)).sum()),
             n_half_depth=int(half.sum()), n_full_depth=int(full.sum()),
             depth_half_depth=median_or_nan(d[half]),
+            depth_half_depth_iqr=float(np.subtract(*np.quantile(d[half], [0.75, 0.25])))
+            if half.any() else np.nan,
             frac_half_depth_lowhet=float(np.mean(h[half] < LOW_HET)) if half.any() else np.nan,
             het_half_depth=median_or_nan(h[half]), het_full_depth=median_or_nan(h[full]),
             n_windows=int(n_win[i]), n_hot_windows=int(n_win[i] - n_use[i])))
@@ -267,7 +276,8 @@ def main(counts_path, samples_path, contigs_path, out, window, step, rule_min, e
         subset = max(MIN_GROUP, 0.05 * r.n_samples)
         if ((r.n_half_depth >= subset and r.n_full_depth >= MIN_GROUP
                 and r.depth_half_depth <= HALF_GROUP_DEPTH
-                and r.frac_half_depth_lowhet >= HALF_GROUP_LOWHET)
+                and (r.depth_half_depth_iqr <= HALF_GROUP_IQR
+                     or r.frac_half_depth_lowhet >= HALF_GROUP_LOWHET))
                 or (r.n_lowhet >= max(MIN_GROUP, LOWHET_SUBSET * r.n_samples)
                     and r.n_normhet >= MIN_GROUP
                     and r.depth_lowhet <= LOWHET_DEPTH_RATIO * r.depth_normhet)):

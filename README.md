@@ -102,7 +102,7 @@ carry signal, and excludes a scaffold when (`sex_id_rule_min_size` and longer):
 |---|---|---|
 | zero het | median normalised het < 0.1 | a Y or W, haplotigs |
 | low het in all | >= 85% of samples below 0.25 | collapsed or duplicated sequence |
-| hemizygous in a subset (X/Z) | >= 5 samples (and >= 5%) below 0.7 depth while >= 5 are above 0.85, the half-depth group at median depth <= 0.6 with >= 40% of it below 0.25 het; or >= 5 samples (and >= 10%) below 0.25 het at <= 0.9 x the depth of >= 5 others | the heterogametic sex's X or Z, or carriers of a large deletion |
+| hemizygous in a subset (X/Z) | >= 5 samples (and >= 5%) below 0.7 depth while >= 5 are above 0.85, the half-depth group at median depth <= 0.6, tight (IQR <= 0.05) or >= 40% of it below 0.25 het; or >= 5 samples (and >= 10%) below 0.25 het at <= 0.9 x the depth of >= 5 others | the heterogametic sex's X or Z, or carriers of a large deletion |
 | half depth, low het in most | median depth < 0.7 and >= 30% of samples below 0.25 het | sequence present once per genome in most samples |
 
 A scaffold where 30-85% of samples have low het at normal depth is reported as
