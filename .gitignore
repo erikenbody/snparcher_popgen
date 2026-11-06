@@ -20,3 +20,4 @@
 *.swp
 .test/results/*/*_raw.vcf.gz*
 Rplots.pdf
+__pycache__/
