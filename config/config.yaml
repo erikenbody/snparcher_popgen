@@ -56,10 +56,16 @@ tess_seed: 42
 method: admixture
 manual_k_assignment: null
 qvalue_threshold: 0.8
+# Samples to leave out of every per-population analysis (population VCFs, ROH,
+# pi, Ne, clam stat), e.g. divergent or out-of-range samples found after the
+# analysis set was made. Applied at population assignment; structure (PCA,
+# ADMIXTURE, TESS) still includes them.
+exclude_samples: []
 
 # --- per-population statistics ---------------------------------------------
 min_samples_per_pop: 2
 roh_min_size: 500000
+roh_min_frac: 0.01             # second F_ROH: ROH >= this fraction of its scaffold (_1pct.froh)
 roh_merge_gap: 10000
 pi_window: 10000
 min_scaffold_size: 10000000

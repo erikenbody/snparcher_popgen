@@ -161,6 +161,7 @@ checkpoint assign_populations:
         method=ASSIGN_METHOD,
         manual_k_assignment=MANUAL_K_PARAM,
         threshold_qval=config["qvalue_threshold"],
+        exclude_samples=config.get("exclude_samples") or [],
         use_coords=USE_COORDS,
         run_tess=RUN_TESS,
         project_id=PREFIX,
@@ -259,7 +260,8 @@ rule merge_roh:
 
 
 rule froh:
-    """F_ROH per sample: fraction of the genome in ROH >= roh_min_size.
+    """F_ROH per sample: fraction of the genome in ROH >= roh_min_size, and
+    (_1pct.froh) in ROH covering >= roh_min_frac of their scaffold.
 
     The genome is the scaffolds > min_scaffold_size that are not excluded: ROH
     cannot be called on excluded scaffolds (they are not in the population VCF),
@@ -272,9 +274,12 @@ rule froh:
     output:
         froh=out("populations/{prefix}_merged_roh/{prefix}_population_{k}.froh"),
         top=out("populations/{prefix}_merged_roh/{prefix}_population_{k}_top.froh"),
+        # Same, counting ROH covering >= roh_min_frac of their scaffold.
+        froh_frac=out("populations/{prefix}_merged_roh/{prefix}_population_{k}_1pct.froh"),
     params:
         population="{k}",
         min_roh_size=config["roh_min_size"],
+        min_roh_frac=config["roh_min_frac"],
         min_scaffold_size=config["min_scaffold_size"],
     conda:
         "../envs/froh.yml"

@@ -303,6 +303,14 @@ df_out <- df_out %>%
 
 write_tsv(df_out, snakemake@output[["all_qvalues"]])
 
+# exclude_samples: dropped from every population and from population_NA.txt.
+dropped <- as.character(unlist(snakemake@params[["exclude_samples"]]))
+unknown <- setdiff(dropped, df_out$Sample)
+if (length(unknown) > 0) {
+  stop("exclude_samples not in the analysis set: ", paste(unknown, collapse = ", "))
+}
+df_out <- df_out %>% filter(!Sample %in% dropped)
+
 dir.create(k_path, recursive = TRUE, showWarnings = FALSE)
 
 df_out %>%
@@ -316,8 +324,13 @@ if (length(excluded) > 0) {
   write_tsv(tibble(Sample = excluded),
             file.path(k_path, "population_NA.txt"), col_names = FALSE)
 }
+if (length(dropped) > 0) {
+  write_tsv(tibble(Sample = dropped),
+            file.path(k_path, "population_dropped.txt"), col_names = FALSE)
+}
 message(nrow(df_out) - length(excluded), " samples assigned; ",
-        length(excluded), " below the qvalue threshold and excluded")
+        length(excluded), " below the qvalue threshold and excluded; ",
+        length(dropped), " dropped by exclude_samples")
 
 # A human-readable record of what was decided, and the marker every downstream
 # rule waits on.
@@ -330,11 +343,17 @@ writeLines(c(
   paste0("qvalue_threshold: ", threshold),
   paste0("samples assigned: ", nrow(df_out) - length(excluded)),
   paste0("samples excluded as admixed: ", length(excluded)),
+  paste0("samples dropped by exclude_samples: ", length(dropped)),
   "",
   "excluded samples:"
 ), con)
 writeLines(excluded, con)
 writeLines("", con)
+if (length(dropped) > 0) {
+  writeLines("dropped samples (exclude_samples):", con)
+  writeLines(dropped, con)
+  writeLines("", con)
+}
 for (pop in sort(unique(na.omit(assigned$population)))) {
   writeLines(paste0("@", pop), con)
   writeLines(assigned$Sample[!is.na(assigned$population) & assigned$population == pop], con)

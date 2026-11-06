@@ -160,6 +160,18 @@ properties:
     description: >
       Samples whose top ancestry coefficient is below this are treated as
       admixed and excluded from all per-population statistics.
+  exclude_samples:
+    type: array
+    items:
+      type: string
+    default: []
+    description: >
+      Samples left out of every population (and of population_NA.txt) at
+      population assignment, and so out of every per-population statistic.
+      Structure (PCA, ADMIXTURE, TESS) is not rerun and still includes them;
+      clam collect/loci still cover them (per-sample masks), clam stat does
+      not. Every name must be in the analysis set. Recorded in
+      populations/{prefix}_populations/population_dropped.txt.
 
   # ------------------------------------------------------------- per-pop stats
   min_samples_per_pop:
@@ -170,6 +182,13 @@ properties:
     type: integer
     default: 500000
     description: ROH shorter than this (bp) are ignored when computing F_ROH.
+  roh_min_frac:
+    type: number
+    default: 0.01
+    description: >
+      A second F_ROH (_1pct.froh) counts a merged ROH when it covers at least
+      this fraction of its scaffold, instead of roh_min_size. Same scaffolds and
+      denominator as the main F_ROH. The file name keeps "1pct" whatever the value.
   roh_merge_gap:
     type: integer
     default: 10000

@@ -168,7 +168,12 @@ if RUN_CLAM:
         """Per-sample per-base depth from the GVCFs into a zarr store."""
         input:
             gvcfs=clam_gvcf_inputs,
-            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+            # ancient(): a later change to the exclude list must not redo the
+            # depth store (the GVCFs are gone by then). clam stat applies the
+            # current list, and thresholds are per chromosome, so newly excluded
+            # scaffolds drop out exactly; a scaffold no longer excluded is absent
+            # until clam_collect is forced.
+            exclude_file=ancient(out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt")),
         output:
             depths_zarr=_depths_zarr_output(DEPTHS_ZARR),
         params:
@@ -215,7 +220,7 @@ if RUN_CLAM:
         """
         input:
             depths_zarr=DEPTHS_ZARR,
-            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+            exclude_file=ancient(out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt")),  # see clam_collect
         output:
             thresholds=out("clam/thresholds.tsv"),
         params:
@@ -260,7 +265,7 @@ if RUN_CLAM:
         """
         input:
             depths_zarr=DEPTHS_ZARR,
-            exclude_file=out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt"),
+            exclude_file=ancient(out("populations/{prefix}_sex_id/{prefix}_exclude_scaffolds.txt")),  # see clam_collect
             thresholds=out("clam/thresholds.tsv"),
         output:
             done=touch(out("clam/callable.zarr.done")),
